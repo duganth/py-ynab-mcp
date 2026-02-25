@@ -23,6 +23,12 @@ dependencies = [
     "pydantic",
 ]
 
+[project.urls]
+Homepage = "https://github.com/duganth/py-ynab-mcp"
+Repository = "https://github.com/duganth/py-ynab-mcp"
+Changelog = "https://github.com/duganth/py-ynab-mcp/blob/main/CHANGELOG.md"
+"Bug Tracker" = "https://github.com/duganth/py-ynab-mcp/issues"
+
 [project.scripts]
 py-ynab-mcp = "py_ynab_mcp.server:main"
 

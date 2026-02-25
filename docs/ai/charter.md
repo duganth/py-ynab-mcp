@@ -119,6 +119,10 @@ Priority after the steel thread will be driven organically by usage.
 - **Privacy** — financial data flows through Claude's API during MCP tool calls; users should understand this tradeoff
 - **Input validation** — amounts, dates, IDs must be validated before hitting the API
 
+## Completion Steps
+
+- Ask if the user wants to cut a release (bump version in pyproject.toml, tag, push tag)
+
 ## Conventions
 
 - 4-space indentation (Python)
