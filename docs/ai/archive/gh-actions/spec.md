@@ -1,6 +1,6 @@
 ---
 feature: gh-actions
-status: implementing
+status: complete
 created: 2026-02-25
 updated: 2026-02-25
 iteration: 0
@@ -62,7 +62,7 @@ strategy:
 - [x] `mypy src/` passes in CI (strict mode)
 - [x] `pytest` passes in CI across all three Python versions
 - [x] Workflow triggers on PR to any branch and push to `main`
-- [ ] CI passes on the PR that introduces it
+- [x] CI passes on the PR that introduces it
 
 ## Findings
 
@@ -74,3 +74,7 @@ strategy:
 
 ### User Notes
 <!-- appended by /dev-ua -->
+
+## Outcome
+
+Added a GitHub Actions CI workflow that runs ruff, mypy (strict), and pytest across Python 3.11/3.12/3.13 on every PR and push to main. Also migrated dev dependencies from `[project.optional-dependencies]` to `[dependency-groups]` (PEP 735) to align with uv conventions. All three matrix jobs passed on PR #1.
