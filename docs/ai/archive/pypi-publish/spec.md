@@ -1,6 +1,6 @@
 ---
 feature: pypi-publish
-status: implementing
+status: complete
 created: 2026-02-25
 updated: 2026-02-25
 iteration: 2
@@ -95,3 +95,7 @@ _[iter 1] No findings. OIDC auth, minimal permissions, no secrets stored. Action
 
 ### User Notes
 <!-- appended by /dev-ua -->
+
+## Outcome
+
+Added a tag-triggered GitHub Actions publish workflow that chains CI → version validation → build → TestPyPI → PyPI → GitHub Release, using OIDC Trusted Publishers for zero-secret auth. Also made `ci.yml` reusable via `workflow_call` and added `[project.urls]` to pyproject.toml. Successfully published v0.1.0 to PyPI on first run.

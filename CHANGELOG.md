@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- PyPI publish workflow — tag-triggered pipeline with TestPyPI validation, Trusted Publishers OIDC, and auto GitHub Releases
 - `list_accounts` MCP tool — lists YNAB accounts with balances (name, type, balance, cleared balance)
 - YNAB API client with async httpx, auth via `YNAB_ACCESS_TOKEN` env var
 - Pydantic models for accounts and budgets with milliunit-to-Decimal conversion
