@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from py_ynab_mcp.client import YNABClient, YNABError
+from py_ynab_mcp.models import TransactionUpdate, TransactionWrite
 
 
 @pytest.fixture
@@ -17,10 +18,12 @@ def client() -> YNABClient:
 def _mock_response(
     status_code: int = 200,
     json_data: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> httpx.Response:
     return httpx.Response(
         status_code=status_code,
         json=json_data or {},
+        headers=headers or {},
         request=httpx.Request(
             "GET", "https://api.ynab.com/v1/test"
         ),
@@ -28,6 +31,7 @@ def _mock_response(
 
 
 _VALID_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+_VALID_UUID_2 = "11111111-2222-3333-4444-555555555555"
 
 
 class TestClientInit:
@@ -54,6 +58,10 @@ class TestClientInit:
                 c._client.headers["Authorization"]
                 == "Bearer env-token"
             )
+
+    def test_rate_limit_initially_none(self) -> None:
+        c = YNABClient(access_token="test")
+        assert c.rate_limit_remaining is None
 
 
 class TestGetBudgets:
@@ -280,3 +288,525 @@ class TestErrorHandling:
             mock_req.return_value = resp
             with pytest.raises(YNABError, match="HTTP 502"):
                 await client.get_budgets()
+
+
+class TestRateLimitTracking:
+    @pytest.mark.anyio
+    async def test_tracks_used_total_format(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {"budgets": []}
+        }
+        resp = _mock_response(
+            200, mock_data,
+            headers={"x-rate-limit": "20/200"},
+        )
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = resp
+            await client.get_budgets()
+
+        assert client.rate_limit_remaining == 180
+
+    @pytest.mark.anyio
+    async def test_tracks_plain_int_format(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {"budgets": []}
+        }
+        resp = _mock_response(
+            200, mock_data,
+            headers={"x-rate-limit": "180"},
+        )
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = resp
+            await client.get_budgets()
+
+        assert client.rate_limit_remaining == 180
+
+    @pytest.mark.anyio
+    async def test_no_header_stays_none(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {"budgets": []}
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            await client.get_budgets()
+
+        assert client.rate_limit_remaining is None
+
+    @pytest.mark.anyio
+    async def test_updates_across_requests(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {"budgets": []}
+        }
+        resp1 = _mock_response(
+            200, mock_data,
+            headers={"x-rate-limit": "100/200"},
+        )
+        resp2 = _mock_response(
+            200, mock_data,
+            headers={"x-rate-limit": "101/200"},
+        )
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = resp1
+            await client.get_budgets()
+            assert client.rate_limit_remaining == 100  # 200-100
+
+            mock_req.return_value = resp2
+            await client.get_budgets()
+            assert client.rate_limit_remaining == 99  # 200-101
+
+
+def _txn_response(
+    txn_id: str = "txn-1",
+) -> dict[str, object]:
+    """Build a mock YNAB transaction response."""
+    return {
+        "data": {
+            "transaction": {
+                "id": txn_id,
+                "account_id": _VALID_UUID,
+                "account_name": "Checking",
+                "date": "2026-02-25",
+                "amount": -42500,
+                "payee_id": None,
+                "payee_name": "Costco",
+                "category_id": None,
+                "category_name": "Groceries",
+                "memo": "Weekly shop",
+                "cleared": "cleared",
+                "approved": True,
+                "deleted": False,
+            }
+        }
+    }
+
+
+class TestCreateTransaction:
+    @pytest.mark.anyio
+    async def test_creates_transaction(
+        self, client: YNABClient
+    ) -> None:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, _txn_response()
+            )
+            txn_write = TransactionWrite(
+                account_id=_VALID_UUID,
+                date="2026-02-25",
+                amount=-42500,
+                payee_name="Costco",
+            )
+            result = await client.create_transaction(
+                _VALID_UUID, txn_write
+            )
+
+        assert result.id == "txn-1"
+        assert result.amount == Decimal("-42.5")
+        assert result.payee_name == "Costco"
+        # Verify POST was called with correct body
+        call_args = mock_req.call_args
+        assert call_args[1]["json"]["transaction"]["amount"] == -42500
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        txn = TransactionWrite(
+            account_id=_VALID_UUID,
+            date="2026-02-25",
+            amount=-42500,
+        )
+        with pytest.raises(YNABError, match="Invalid budget_id"):
+            await client.create_transaction("bad-id", txn)
+
+
+class TestCreateTransactions:
+    @pytest.mark.anyio
+    async def test_bulk_create(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "bulk": {
+                    "transaction_ids": ["txn-1", "txn-2"],
+                    "duplicate_import_ids": [],
+                }
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            writes = [
+                TransactionWrite(
+                    account_id=_VALID_UUID,
+                    date="2026-02-25",
+                    amount=-10000,
+                ),
+                TransactionWrite(
+                    account_id=_VALID_UUID,
+                    date="2026-02-25",
+                    amount=-20000,
+                ),
+            ]
+            result = await client.create_transactions(
+                _VALID_UUID, writes
+            )
+
+        assert result.transaction_ids == ["txn-1", "txn-2"]
+        assert result.duplicate_import_ids == []
+
+    @pytest.mark.anyio
+    async def test_bulk_with_duplicates(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "bulk": {
+                    "transaction_ids": ["txn-1"],
+                    "duplicate_import_ids": ["import-dup"],
+                }
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            writes = [
+                TransactionWrite(
+                    account_id=_VALID_UUID,
+                    date="2026-02-25",
+                    amount=-10000,
+                    import_id="import-dup",
+                ),
+            ]
+            result = await client.create_transactions(
+                _VALID_UUID, writes
+            )
+
+        assert result.duplicate_import_ids == ["import-dup"]
+
+
+class TestUpdateTransaction:
+    @pytest.mark.anyio
+    async def test_update_single(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "transactions": [
+                    {
+                        "id": _VALID_UUID_2,
+                        "account_id": _VALID_UUID,
+                        "account_name": "Checking",
+                        "date": "2026-02-25",
+                        "amount": -50000,
+                        "payee_id": None,
+                        "payee_name": "Costco",
+                        "category_id": None,
+                        "category_name": "Groceries",
+                        "memo": "Updated memo",
+                        "cleared": "cleared",
+                        "approved": True,
+                        "deleted": False,
+                    }
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            update = TransactionUpdate(
+                id=_VALID_UUID_2,
+                memo="Updated memo",
+            )
+            result = await client.update_transaction(
+                _VALID_UUID, update
+            )
+
+        assert result.memo == "Updated memo"
+        # Verify PATCH was called
+        call_args = mock_req.call_args
+        assert call_args[0][0] == "PATCH"
+
+
+class TestUpdateTransactions:
+    @pytest.mark.anyio
+    async def test_bulk_update(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "transactions": [
+                    {
+                        "id": _VALID_UUID,
+                        "account_id": _VALID_UUID,
+                        "account_name": "Checking",
+                        "date": "2026-02-25",
+                        "amount": -10000,
+                        "payee_id": None,
+                        "payee_name": None,
+                        "category_id": None,
+                        "category_name": None,
+                        "memo": "Bulk updated",
+                        "cleared": "cleared",
+                        "approved": True,
+                        "deleted": False,
+                    },
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            updates = [
+                TransactionUpdate(
+                    id=_VALID_UUID,
+                    memo="Bulk updated",
+                ),
+            ]
+            result = await client.update_transactions(
+                _VALID_UUID, updates
+            )
+
+        assert len(result) == 1
+        assert result[0].memo == "Bulk updated"
+
+
+class TestDeleteTransaction:
+    @pytest.mark.anyio
+    async def test_deletes_transaction(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "transaction": {
+                    "id": _VALID_UUID_2,
+                    "account_id": _VALID_UUID,
+                    "account_name": "Checking",
+                    "date": "2026-02-25",
+                    "amount": -42500,
+                    "payee_id": None,
+                    "payee_name": None,
+                    "category_id": None,
+                    "category_name": None,
+                    "memo": None,
+                    "cleared": "cleared",
+                    "approved": True,
+                    "deleted": True,
+                }
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            await client.delete_transaction(
+                _VALID_UUID, _VALID_UUID_2
+            )
+
+        call_args = mock_req.call_args
+        assert call_args[0][0] == "DELETE"
+        assert _VALID_UUID_2 in call_args[0][1]
+
+    @pytest.mark.anyio
+    async def test_invalid_transaction_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid transaction_id"
+        ):
+            await client.delete_transaction(
+                _VALID_UUID, "bad-id"
+            )
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.delete_transaction(
+                "bad-id", _VALID_UUID_2
+            )
+
+
+class TestGetCategories:
+    @pytest.mark.anyio
+    async def test_returns_categories(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "category_groups": [
+                    {
+                        "id": "grp-1",
+                        "name": "Bills",
+                        "deleted": False,
+                        "categories": [
+                            {
+                                "id": "cat-1",
+                                "name": "Rent",
+                                "budgeted": 1500000,
+                                "activity": -1500000,
+                                "balance": 0,
+                                "deleted": False,
+                            },
+                        ],
+                    },
+                    {
+                        "id": "grp-2",
+                        "name": "Deleted Group",
+                        "deleted": True,
+                        "categories": [],
+                    },
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            groups = await client.get_categories(_VALID_UUID)
+
+        assert len(groups) == 1
+        assert groups[0].name == "Bills"
+        assert groups[0].categories[0].budgeted == Decimal("1500")
+
+    @pytest.mark.anyio
+    async def test_filters_deleted_categories_within_groups(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "category_groups": [
+                    {
+                        "id": "grp-1",
+                        "name": "Bills",
+                        "deleted": False,
+                        "categories": [
+                            {
+                                "id": "cat-1",
+                                "name": "Rent",
+                                "budgeted": 1500000,
+                                "activity": -1500000,
+                                "balance": 0,
+                                "deleted": False,
+                            },
+                            {
+                                "id": "cat-2",
+                                "name": "Old Bill",
+                                "budgeted": 0,
+                                "activity": 0,
+                                "balance": 0,
+                                "deleted": True,
+                            },
+                        ],
+                    },
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            groups = await client.get_categories(_VALID_UUID)
+
+        assert len(groups) == 1
+        assert len(groups[0].categories) == 1
+        assert groups[0].categories[0].name == "Rent"
+
+
+class TestGetPayees:
+    @pytest.mark.anyio
+    async def test_returns_payees(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "payees": [
+                    {
+                        "id": "payee-1",
+                        "name": "Costco",
+                        "deleted": False,
+                    },
+                    {
+                        "id": "payee-2",
+                        "name": "Old Payee",
+                        "deleted": True,
+                    },
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            payees = await client.get_payees(_VALID_UUID)
+
+        assert len(payees) == 1
+        assert payees[0].name == "Costco"
+
+
+class TestRequestJsonBody:
+    @pytest.mark.anyio
+    async def test_passes_json_body(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": _txn_response()["data"]
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            txn = TransactionWrite(
+                account_id=_VALID_UUID,
+                date="2026-02-25",
+                amount=-42500,
+            )
+            await client.create_transaction(_VALID_UUID, txn)
+
+        call_kwargs = mock_req.call_args[1]
+        assert "json" in call_kwargs
+        assert call_kwargs["json"]["transaction"]["amount"] == -42500
