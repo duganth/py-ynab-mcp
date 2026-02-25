@@ -25,6 +25,7 @@ _BUDGET_ID_RE = re.compile(
     r"[0-9a-f]{12}$|^last-used$"
 )
 _CLEARED_VALUES = {"cleared", "uncleared", "reconciled"}
+_TRANSACTION_TYPE_VALUES = {"uncategorized", "unapproved"}
 _RATE_LIMIT_THRESHOLD = 20
 
 
@@ -72,6 +73,16 @@ def _validate_budget_id(budget_id: str) -> str | None:
         return (
             f"Invalid budget_id: {budget_id!r}. "
             "Must be a UUID or 'last-used'."
+        )
+    return None
+
+
+def _validate_transaction_type(type_val: str) -> str | None:
+    """Validate transaction type filter. Returns error or None."""
+    if type_val not in _TRANSACTION_TYPE_VALUES:
+        return (
+            f"Invalid type: {type_val!r}. "
+            "Must be 'uncategorized' or 'unapproved'."
         )
     return None
 
@@ -242,6 +253,117 @@ async def list_payees(budget_id: str | None = None) -> str:
                 f"  ID: `{payee.id}`"
             )
         return "\n".join(lines)
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+    finally:
+        await client.close()
+
+
+@mcp.tool()
+async def list_transactions(
+    since_date: str,
+    account_id: str | None = None,
+    category_id: str | None = None,
+    payee_id: str | None = None,
+    type: str | None = None,
+    budget_id: str | None = None,
+) -> str:
+    """List transactions from YNAB with optional filters.
+
+    Returns transactions since the given date. Optionally filter by
+    one of: account, category, or payee (mutually exclusive).
+
+    Args:
+        since_date: Start date (YYYY-MM-DD). Required.
+        account_id: Filter by account UUID.
+        category_id: Filter by category UUID.
+        payee_id: Filter by payee UUID.
+        type: Filter by "uncategorized" or "unapproved".
+        budget_id: Budget ID. Defaults to last-used budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+
+    err = _validate_date(since_date)
+    if err:
+        return err
+
+    # Validate mutual exclusivity of filter IDs.
+    filter_count = sum(
+        1 for f in (account_id, category_id, payee_id)
+        if f is not None
+    )
+    if filter_count > 1:
+        return (
+            "Only one of account_id, category_id, or "
+            "payee_id may be provided."
+        )
+
+    if account_id:
+        err = _validate_uuid(account_id, "account_id")
+        if err:
+            return err
+    if category_id:
+        err = _validate_uuid(category_id, "category_id")
+        if err:
+            return err
+    if payee_id:
+        err = _validate_uuid(payee_id, "payee_id")
+        if err:
+            return err
+    if type:
+        err = _validate_transaction_type(type)
+        if err:
+            return err
+
+    try:
+        client = YNABClient()
+    except ValueError:
+        return (
+            "Configuration error: YNAB access token not found. "
+            "Set the YNAB_ACCESS_TOKEN environment variable."
+        )
+
+    try:
+        transactions = await client.get_transactions(
+            bid,
+            since_date=since_date,
+            account_id=account_id,
+            category_id=category_id,
+            payee_id=payee_id,
+            type=type,
+        )
+
+        if not transactions:
+            return f"No transactions found since {since_date}."
+
+        total = sum(
+            (t.amount for t in transactions), Decimal(0)
+        )
+        lines: list[str] = [
+            f"Transactions since {since_date} "
+            f"({len(transactions)} found):",
+            "",
+        ]
+        for i, txn in enumerate(transactions, 1):
+            lines.append(
+                f"{i}. {txn.date}: "
+                f"{_format_transaction(txn)}\n"
+                f"   ID: `{txn.id}`"
+            )
+        lines.append("")
+        lines.append(
+            f"Total: {_format_dollars(total)} "
+            f"({len(transactions)} transactions)"
+        )
+
+        response = "\n".join(lines)
+        response += _rate_limit_warning(client)
+        return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
     except Exception:

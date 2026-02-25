@@ -21,6 +21,7 @@ from py_ynab_mcp.server import (
     list_accounts,
     list_categories,
     list_payees,
+    list_transactions,
     update_transaction,
 )
 
@@ -600,6 +601,288 @@ class TestListPayees:
             await list_payees()
 
         mock_client.close.assert_called_once()
+
+
+class TestListTransactions:
+    @pytest.mark.anyio
+    async def test_returns_formatted_list(self) -> None:
+        txns = [
+            _make_transaction("txn-1", Decimal("-42.50")),
+            _make_transaction(
+                "txn-2", Decimal("100.00"),
+                payee_name="Employer",
+                category_name="Income",
+                memo="Paycheck",
+            ),
+        ]
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.return_value = txns
+            mock_client.rate_limit_remaining = None
+            mock_cls.return_value = mock_client
+
+            result = await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        assert "2 found" in result
+        assert "txn-1" in result
+        assert "txn-2" in result
+        assert "Costco" in result
+        assert "Employer" in result
+        assert "Total:" in result
+
+    @pytest.mark.anyio
+    async def test_no_transactions(self) -> None:
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.return_value = []
+            mock_cls.return_value = mock_client
+
+            result = await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        assert "No transactions found" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_since_date(self) -> None:
+        result = await list_transactions(
+            since_date="bad-date"
+        )
+        assert "Invalid date" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_account_id(self) -> None:
+        result = await list_transactions(
+            since_date="2026-02-01",
+            account_id="bad-id",
+        )
+        assert "Invalid account_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_category_id(self) -> None:
+        result = await list_transactions(
+            since_date="2026-02-01",
+            category_id="bad-id",
+        )
+        assert "Invalid category_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_payee_id(self) -> None:
+        result = await list_transactions(
+            since_date="2026-02-01",
+            payee_id="bad-id",
+        )
+        assert "Invalid payee_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_type(self) -> None:
+        result = await list_transactions(
+            since_date="2026-02-01",
+            type="invalid",
+        )
+        assert "Invalid type" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await list_transactions(
+            since_date="2026-02-01",
+            budget_id="../../evil",
+        )
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_multiple_filters_returns_error(
+        self,
+    ) -> None:
+        result = await list_transactions(
+            since_date="2026-02-01",
+            account_id=_VALID_UUID,
+            category_id=_VALID_UUID_2,
+        )
+        assert "Only one of" in result
+
+    @pytest.mark.anyio
+    async def test_passes_account_filter(self) -> None:
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.return_value = []
+            mock_cls.return_value = mock_client
+
+            await list_transactions(
+                since_date="2026-02-01",
+                account_id=_VALID_UUID,
+            )
+
+        mock_client.get_transactions.assert_called_once_with(
+            "last-used",
+            since_date="2026-02-01",
+            account_id=_VALID_UUID,
+            category_id=None,
+            payee_id=None,
+            type=None,
+        )
+
+    @pytest.mark.anyio
+    async def test_passes_type_filter(self) -> None:
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.return_value = []
+            mock_cls.return_value = mock_client
+
+            await list_transactions(
+                since_date="2026-02-01",
+                type="unapproved",
+            )
+
+        call_kwargs = (
+            mock_client.get_transactions.call_args[1]
+        )
+        assert call_kwargs["type"] == "unapproved"
+
+    @pytest.mark.anyio
+    async def test_total_in_output(self) -> None:
+        txns = [
+            _make_transaction("t1", Decimal("-42.50")),
+            _make_transaction("t2", Decimal("-7.50")),
+        ]
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.return_value = txns
+            mock_client.rate_limit_remaining = None
+            mock_cls.return_value = mock_client
+
+            result = await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        assert "-$50.00" in result
+        assert "2 transactions" in result
+
+    @pytest.mark.anyio
+    async def test_rate_limit_warning(self) -> None:
+        txns = [_make_transaction()]
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.return_value = txns
+            mock_client.rate_limit_remaining = 10
+            mock_cls.return_value = mock_client
+
+            result = await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        assert "Rate limit" in result
+        assert "10/200" in result
+
+    @pytest.mark.anyio
+    async def test_missing_token(self) -> None:
+        with patch(
+            "py_ynab_mcp.server.YNABClient",
+            side_effect=ValueError("token required"),
+        ):
+            result = await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        assert "Configuration error" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.side_effect = (
+                YNABError(401, "Invalid access token")
+            )
+            mock_cls.return_value = mock_client
+
+            result = await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        assert "Invalid access token" in result
+
+    @pytest.mark.anyio
+    async def test_unexpected_error(self) -> None:
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.side_effect = (
+                RuntimeError("boom")
+            )
+            mock_cls.return_value = mock_client
+
+            result = await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        assert "unexpected error" in result
+
+    @pytest.mark.anyio
+    async def test_client_closed(self) -> None:
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.return_value = []
+            mock_cls.return_value = mock_client
+
+            await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        mock_client.close.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_client_closed_after_error(self) -> None:
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.side_effect = (
+                YNABError(500, "Server error")
+            )
+            mock_cls.return_value = mock_client
+
+            await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        mock_client.close.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_transaction_ids_in_output(self) -> None:
+        txns = [_make_transaction("txn-abc-123")]
+        with patch(
+            "py_ynab_mcp.server.YNABClient"
+        ) as mock_cls:
+            mock_client = AsyncMock()
+            mock_client.get_transactions.return_value = txns
+            mock_client.rate_limit_remaining = None
+            mock_cls.return_value = mock_client
+
+            result = await list_transactions(
+                since_date="2026-02-01"
+            )
+
+        assert "txn-abc-123" in result
+        assert "ID:" in result
 
 
 class TestCreateTransaction:

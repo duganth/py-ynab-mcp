@@ -786,6 +786,255 @@ class TestGetPayees:
         assert payees[0].name == "Costco"
 
 
+def _txn_list_response(
+    *txn_ids: str,
+) -> dict[str, object]:
+    """Build a mock YNAB transactions list response."""
+    txns = []
+    for tid in txn_ids:
+        txns.append({
+            "id": tid,
+            "account_id": _VALID_UUID,
+            "account_name": "Checking",
+            "date": "2026-02-25",
+            "amount": -42500,
+            "payee_id": None,
+            "payee_name": "Costco",
+            "category_id": None,
+            "category_name": "Groceries",
+            "memo": "Weekly shop",
+            "cleared": "cleared",
+            "approved": True,
+            "deleted": False,
+        })
+    return {"data": {"transactions": txns}}
+
+
+class TestGetTransactions:
+    @pytest.mark.anyio
+    async def test_returns_transactions(
+        self, client: YNABClient
+    ) -> None:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, _txn_list_response("txn-1", "txn-2")
+            )
+            result = await client.get_transactions(
+                _VALID_UUID, since_date="2026-02-01"
+            )
+
+        assert len(result) == 2
+        assert result[0].id == "txn-1"
+        assert result[1].id == "txn-2"
+
+    @pytest.mark.anyio
+    async def test_filters_deleted(
+        self, client: YNABClient
+    ) -> None:
+        data: dict[str, object] = {
+            "data": {
+                "transactions": [
+                    {
+                        "id": "txn-1",
+                        "account_id": _VALID_UUID,
+                        "account_name": "Checking",
+                        "date": "2026-02-25",
+                        "amount": -42500,
+                        "payee_id": None,
+                        "payee_name": "Costco",
+                        "category_id": None,
+                        "category_name": "Groceries",
+                        "memo": None,
+                        "cleared": "cleared",
+                        "approved": True,
+                        "deleted": False,
+                    },
+                    {
+                        "id": "txn-2",
+                        "account_id": _VALID_UUID,
+                        "account_name": "Checking",
+                        "date": "2026-02-25",
+                        "amount": -10000,
+                        "payee_id": None,
+                        "payee_name": "Deleted",
+                        "category_id": None,
+                        "category_name": None,
+                        "memo": None,
+                        "cleared": "cleared",
+                        "approved": True,
+                        "deleted": True,
+                    },
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(200, data)
+            result = await client.get_transactions(
+                _VALID_UUID, since_date="2026-02-01"
+            )
+
+        assert len(result) == 1
+        assert result[0].id == "txn-1"
+
+    @pytest.mark.anyio
+    async def test_routes_to_account_endpoint(
+        self, client: YNABClient
+    ) -> None:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, _txn_list_response()
+            )
+            await client.get_transactions(
+                _VALID_UUID,
+                since_date="2026-02-01",
+                account_id=_VALID_UUID_2,
+            )
+
+        call_args = mock_req.call_args
+        path = call_args[0][1]
+        assert f"/accounts/{_VALID_UUID_2}/transactions" in path
+
+    @pytest.mark.anyio
+    async def test_routes_to_category_endpoint(
+        self, client: YNABClient
+    ) -> None:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, _txn_list_response()
+            )
+            await client.get_transactions(
+                _VALID_UUID,
+                since_date="2026-02-01",
+                category_id=_VALID_UUID_2,
+            )
+
+        call_args = mock_req.call_args
+        path = call_args[0][1]
+        assert (
+            f"/categories/{_VALID_UUID_2}/transactions" in path
+        )
+
+    @pytest.mark.anyio
+    async def test_routes_to_payee_endpoint(
+        self, client: YNABClient
+    ) -> None:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, _txn_list_response()
+            )
+            await client.get_transactions(
+                _VALID_UUID,
+                since_date="2026-02-01",
+                payee_id=_VALID_UUID_2,
+            )
+
+        call_args = mock_req.call_args
+        path = call_args[0][1]
+        assert f"/payees/{_VALID_UUID_2}/transactions" in path
+
+    @pytest.mark.anyio
+    async def test_passes_since_date_param(
+        self, client: YNABClient
+    ) -> None:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, _txn_list_response()
+            )
+            await client.get_transactions(
+                _VALID_UUID, since_date="2026-02-01"
+            )
+
+        call_kwargs = mock_req.call_args[1]
+        assert call_kwargs["params"]["since_date"] == "2026-02-01"
+
+    @pytest.mark.anyio
+    async def test_passes_type_param(
+        self, client: YNABClient
+    ) -> None:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, _txn_list_response()
+            )
+            await client.get_transactions(
+                _VALID_UUID,
+                since_date="2026-02-01",
+                type="uncategorized",
+            )
+
+        call_kwargs = mock_req.call_args[1]
+        assert call_kwargs["params"]["type"] == "uncategorized"
+
+    @pytest.mark.anyio
+    async def test_multiple_filters_raises(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            ValueError, match="At most one"
+        ):
+            await client.get_transactions(
+                _VALID_UUID,
+                since_date="2026-02-01",
+                account_id=_VALID_UUID_2,
+                category_id=_VALID_UUID_2,
+            )
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.get_transactions(
+                "bad-id", since_date="2026-02-01"
+            )
+
+    @pytest.mark.anyio
+    async def test_invalid_account_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid account_id"
+        ):
+            await client.get_transactions(
+                _VALID_UUID,
+                since_date="2026-02-01",
+                account_id="bad-id",
+            )
+
+    @pytest.mark.anyio
+    async def test_default_endpoint_no_filter(
+        self, client: YNABClient
+    ) -> None:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, _txn_list_response()
+            )
+            await client.get_transactions(
+                _VALID_UUID, since_date="2026-02-01"
+            )
+
+        call_args = mock_req.call_args
+        path = call_args[0][1]
+        assert path == f"/budgets/{_VALID_UUID}/transactions"
+
+
 class TestRequestJsonBody:
     @pytest.mark.anyio
     async def test_passes_json_body(

@@ -82,11 +82,12 @@ class YNABClient:
         path: str,
         *,
         json: dict[str, object] | None = None,
+        params: dict[str, str] | None = None,
     ) -> dict[str, object]:
         """Make an authenticated request to the YNAB API."""
         try:
             response = await self._client.request(
-                method, path, json=json
+                method, path, json=json, params=params
             )
         except httpx.HTTPError:
             raise YNABError(
@@ -208,6 +209,81 @@ class YNABClient:
                 0, "Unexpected response format from YNAB API"
             ) from None
         return [p for p in parsed.payees if not p.deleted]
+
+    async def get_transactions(
+        self,
+        budget_id: str = "last-used",
+        *,
+        since_date: str,
+        account_id: str | None = None,
+        category_id: str | None = None,
+        payee_id: str | None = None,
+        type: str | None = None,
+    ) -> list[Transaction]:
+        """List transactions with optional filters.
+
+        Exactly one of account_id, category_id, payee_id may be
+        provided to filter by that dimension. All accept since_date
+        and type as additional filters.
+        """
+        self._validate_budget_id(budget_id)
+        filters = [
+            f for f in (account_id, category_id, payee_id)
+            if f is not None
+        ]
+        if len(filters) > 1:
+            raise ValueError(
+                "At most one of account_id, category_id, "
+                "payee_id may be provided."
+            )
+
+        # Build the endpoint path based on which filter is set.
+        if account_id:
+            if not _UUID_RE.match(account_id):
+                raise YNABError(
+                    400, "Invalid account_id format"
+                )
+            path = (
+                f"/budgets/{budget_id}"
+                f"/accounts/{account_id}/transactions"
+            )
+        elif category_id:
+            if not _UUID_RE.match(category_id):
+                raise YNABError(
+                    400, "Invalid category_id format"
+                )
+            path = (
+                f"/budgets/{budget_id}"
+                f"/categories/{category_id}/transactions"
+            )
+        elif payee_id:
+            if not _UUID_RE.match(payee_id):
+                raise YNABError(
+                    400, "Invalid payee_id format"
+                )
+            path = (
+                f"/budgets/{budget_id}"
+                f"/payees/{payee_id}/transactions"
+            )
+        else:
+            path = f"/budgets/{budget_id}/transactions"
+
+        params: dict[str, str] = {"since_date": since_date}
+        if type:
+            params["type"] = type
+
+        data = await self._request(
+            "GET", path, params=params
+        )
+        try:
+            parsed = TransactionsResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return [
+            t for t in parsed.transactions if not t.deleted
+        ]
 
     async def create_transaction(
         self,
