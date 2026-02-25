@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- Transaction CRUD tools — `create_transaction`, `create_transactions` (bulk), `update_transaction`, `delete_transaction` with dry-run support and input validation
+- `list_categories` MCP tool — lists category groups with names, balances, and IDs
+- `list_payees` MCP tool — lists payees with names and IDs
+- Rate limit tracking from YNAB `X-Rate-Limit` headers with warning when approaching 200/hr ceiling
+- Account UUIDs now shown in `list_accounts` output for use with write tools
 - PyPI publish workflow — tag-triggered pipeline with TestPyPI validation, Trusted Publishers OIDC, and auto GitHub Releases
 - `list_accounts` MCP tool — lists YNAB accounts with balances (name, type, balance, cleared balance)
 - YNAB API client with async httpx, auth via `YNAB_ACCESS_TOKEN` env var

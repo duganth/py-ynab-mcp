@@ -1,6 +1,6 @@
 ---
 feature: transactions
-status: implementing
+status: complete
 created: 2026-02-25
 updated: 2026-02-25
 iteration: 2
@@ -267,22 +267,22 @@ All in the MCP tool layer (before hitting the client):
 
 ## Acceptance Criteria
 
-- [ ] `create_transaction` tool creates a transaction and returns confirmation with the transaction ID
-- [ ] `update_transaction` tool updates specified fields and returns the updated summary
-- [ ] `delete_transaction` tool deletes a transaction and returns confirmation
-- [ ] Invalid amounts (empty, non-numeric, NaN) return clear error messages
-- [ ] Invalid dates return clear error messages
-- [ ] Invalid IDs return clear error messages
-- [ ] Dollar-to-milliunit conversion is exact (no floating point drift)
-- [ ] Client bulk methods (`create_transactions`, `update_transactions`) work correctly
-- [ ] `get_categories` and `get_payees` client methods return filtered (non-deleted) results
-- [ ] `create_transactions` (bulk) tool creates multiple transactions in a single API call
-- [ ] Rate limit remaining is tracked from YNAB response headers after each request
-- [ ] Tool responses include a warning when rate limit remaining <= 20
-- [ ] `dry_run=True` validates inputs and returns a preview without making API calls
-- [ ] `dry_run=True` works for all four write tools (create, create bulk, update, delete)
-- [ ] All existing tests continue to pass
-- [ ] `uv run pytest` passes, `uv run ruff check .` clean, `uv run mypy src/` clean
+- [x] `create_transaction` tool creates a transaction and returns confirmation with the transaction ID
+- [x] `update_transaction` tool updates specified fields and returns the updated summary
+- [x] `delete_transaction` tool deletes a transaction and returns confirmation
+- [x] Invalid amounts (empty, non-numeric, NaN) return clear error messages
+- [x] Invalid dates return clear error messages
+- [x] Invalid IDs return clear error messages
+- [x] Dollar-to-milliunit conversion is exact (no floating point drift)
+- [x] Client bulk methods (`create_transactions`, `update_transactions`) work correctly
+- [x] `get_categories` and `get_payees` client methods return filtered (non-deleted) results
+- [x] `create_transactions` (bulk) tool creates multiple transactions in a single API call
+- [x] Rate limit remaining is tracked from YNAB response headers after each request
+- [x] Tool responses include a warning when rate limit remaining <= 20
+- [x] `dry_run=True` validates inputs and returns a preview without making API calls
+- [x] `dry_run=True` works for all four write tools (create, create bulk, update, delete)
+- [x] All existing tests continue to pass
+- [x] `uv run pytest` passes, `uv run ruff check .` clean, `uv run mypy src/` clean
 - [x] `list_accounts` output includes UUIDs that can be passed to write tools
 - [x] `list_categories` tool returns category groups with IDs and names
 - [x] `list_payees` tool returns payees with IDs and names
@@ -325,3 +325,7 @@ All in the MCP tool layer (before hitting the client):
 **[iter 1 UA]** Write tools require UUIDs but read tools don't expose them — the AI can't use create_transaction without already knowing account/category/payee IDs. Need to:
 - [x] Add UUIDs to `list_accounts` output
 - [x] Wire up `list_categories` and `list_payees` as MCP tools (client methods already exist)
+
+## Outcome
+
+Added full transaction CRUD to the MCP server: `create_transaction`, `create_transactions` (bulk), `update_transaction`, and `delete_transaction` tools with dry-run support, input validation, and rate limit tracking. Also added `list_categories` and `list_payees` tools and exposed account UUIDs in `list_accounts` so the AI can resolve names to IDs for write operations. 231 tests, 2 pipeline iterations, 0 open findings.
