@@ -1,6 +1,6 @@
 ---
 feature: trans-queries
-status: implementing
+status: complete
 created: 2026-02-25
 updated: 2026-02-25
 iteration: 1
@@ -130,22 +130,22 @@ Reuse existing: `_validate_date`, `_validate_uuid`, `_validate_budget_id`.
 
 ## Acceptance Criteria
 
-- [ ] `list_transactions` returns transactions filtered by date range
-- [ ] Filtering by `account_id` routes to the account-specific YNAB endpoint
-- [ ] Filtering by `category_id` routes to the category-specific YNAB endpoint
-- [ ] Filtering by `payee_id` routes to the payee-specific YNAB endpoint
-- [ ] Providing multiple filter IDs returns a clear error
-- [ ] `type` filter (`uncategorized`/`unapproved`) works alongside other filters
-- [ ] Invalid `since_date` returns a clear error
-- [ ] Missing `since_date` returns a clear error (it's required)
-- [ ] Invalid filter IDs return clear error messages
-- [ ] Invalid `type` returns a clear error
-- [ ] Deleted transactions are filtered out of results
-- [ ] Output includes transaction count and total amount
-- [ ] Each transaction in output includes its ID for reference by write tools
-- [ ] `_request()` correctly passes query params to httpx
-- [ ] All existing tests continue to pass
-- [ ] `uv run pytest` passes, `uv run ruff check .` clean, `uv run mypy src/` clean
+- [x] `list_transactions` returns transactions filtered by date range
+- [x] Filtering by `account_id` routes to the account-specific YNAB endpoint
+- [x] Filtering by `category_id` routes to the category-specific YNAB endpoint
+- [x] Filtering by `payee_id` routes to the payee-specific YNAB endpoint
+- [x] Providing multiple filter IDs returns a clear error
+- [x] `type` filter (`uncategorized`/`unapproved`) works alongside other filters
+- [x] Invalid `since_date` returns a clear error
+- [x] Missing `since_date` returns a clear error (it's required)
+- [x] Invalid filter IDs return clear error messages
+- [x] Invalid `type` returns a clear error
+- [x] Deleted transactions are filtered out of results
+- [x] Output includes transaction count and total amount
+- [x] Each transaction in output includes its ID for reference by write tools
+- [x] `_request()` correctly passes query params to httpx
+- [x] All existing tests continue to pass
+- [x] `uv run pytest` passes, `uv run ruff check .` clean, `uv run mypy src/` clean
 
 ## Findings
 
@@ -161,3 +161,7 @@ Reuse existing: `_validate_date`, `_validate_uuid`, `_validate_budget_id`.
 
 ### User Notes
 <!-- appended by /dev-ua -->
+
+## Outcome
+
+Added `list_transactions` MCP tool for querying YNAB transactions with required date filtering and optional account/category/payee filters. The client routes to the correct YNAB endpoint based on which filter is provided, and the `_request()` method was extended with query parameter support. Clean pipeline run — 0 QA findings, 0 security findings, 1 iteration.

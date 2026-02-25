@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- `list_transactions` MCP tool — query transactions with required `since_date` and optional account/category/payee/type filters, routes to correct YNAB endpoint
+- Query parameter support in YNAB client `_request()` method
 - Transaction CRUD tools — `create_transaction`, `create_transactions` (bulk), `update_transaction`, `delete_transaction` with dry-run support and input validation
 - `list_categories` MCP tool — lists category groups with names, balances, and IDs
 - `list_payees` MCP tool — lists payees with names and IDs
