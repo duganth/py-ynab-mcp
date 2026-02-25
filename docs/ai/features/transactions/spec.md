@@ -3,7 +3,7 @@ feature: transactions
 status: implementing
 created: 2026-02-25
 updated: 2026-02-25
-iteration: 1
+iteration: 2
 ---
 
 ## Overview
@@ -283,6 +283,9 @@ All in the MCP tool layer (before hitting the client):
 - [ ] `dry_run=True` works for all four write tools (create, create bulk, update, delete)
 - [ ] All existing tests continue to pass
 - [ ] `uv run pytest` passes, `uv run ruff check .` clean, `uv run mypy src/` clean
+- [x] `list_accounts` output includes UUIDs that can be passed to write tools
+- [x] `list_categories` tool returns category groups with IDs and names
+- [x] `list_payees` tool returns payees with IDs and names
 
 ## Findings
 
@@ -295,6 +298,12 @@ All in the MCP tool layer (before hitting the client):
 - [x] `update_transaction` client signature uses `TransactionUpdate` (partial model via bulk PATCH) instead of spec's `TransactionWrite` via PUT — implementation is better (supports partial updates), spec deviation is intentional
 - Note: dry_run skips client instantiation entirely (no token check) — this is intentional, enables tokenless QA testing
 
+**[iter 2]** All 18 acceptance criteria pass. 2 test gaps found and fixed:
+
+- [x] `TestListCategories` and `TestListPayees` were missing `test_unexpected_error_caught` — added
+- [x] `TestListCategories` and `TestListPayees` were missing `test_client_closed_after_error` — added
+- Note: list tools don't validate `budget_id` at server layer (unlike write tools) — client validates and error is caught. Inconsistent error message but not a bug.
+
 ### Security
 
 **[iter 1]** 4 issues found:
@@ -306,5 +315,13 @@ All in the MCP tool layer (before hitting the client):
 - Accepted: sub-milliunit truncation in `dollars_to_milliunits` (uses `int()` which truncates). YNAB amounts are milliunits so 3 decimal places covers all valid inputs. **LOW, accepted**
 - Accepted: no upper bound on bulk array size. YNAB API has its own limits. **LOW, accepted**
 
+**[iter 2]** 1 issue found and fixed:
+
+- [x] Read tools (`list_accounts`, `list_categories`, `list_payees`) were missing server-layer `budget_id` validation — inconsistent with write tools. Fixed: added `_validate_budget_id()` before client instantiation. **MEDIUM**
+
 ### User Notes
 <!-- appended by /dev-ua -->
+
+**[iter 1 UA]** Write tools require UUIDs but read tools don't expose them — the AI can't use create_transaction without already knowing account/category/payee IDs. Need to:
+- [x] Add UUIDs to `list_accounts` output
+- [x] Wire up `list_categories` and `list_payees` as MCP tools (client methods already exist)

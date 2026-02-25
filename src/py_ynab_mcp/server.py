@@ -118,6 +118,11 @@ async def list_accounts(budget_id: str | None = None) -> str:
         budget_id: Budget ID to list accounts for.
             If not provided, uses the default budget.
     """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+
     try:
         client = YNABClient()
     except ValueError:
@@ -127,7 +132,6 @@ async def list_accounts(budget_id: str | None = None) -> str:
         )
 
     try:
-        bid = budget_id or "last-used"
         accounts = await client.get_accounts(bid)
 
         if not accounts:
@@ -139,7 +143,103 @@ async def list_accounts(budget_id: str | None = None) -> str:
             cleared = _format_dollars(acct.cleared_balance)
             lines.append(
                 f"- **{acct.name}** ({acct.type}): "
-                f"{bal} (cleared: {cleared})"
+                f"{bal} (cleared: {cleared})\n"
+                f"  ID: `{acct.id}`"
+            )
+        return "\n".join(lines)
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+    finally:
+        await client.close()
+
+
+@mcp.tool()
+async def list_categories(budget_id: str | None = None) -> str:
+    """List all categories for a YNAB budget, grouped by category group.
+
+    Returns category names and IDs needed for creating transactions.
+
+    Args:
+        budget_id: Budget ID to list categories for.
+            If not provided, uses the default budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+
+    try:
+        client = YNABClient()
+    except ValueError:
+        return (
+            "Configuration error: YNAB access token not found. "
+            "Set the YNAB_ACCESS_TOKEN environment variable."
+        )
+
+    try:
+        groups = await client.get_categories(bid)
+
+        if not groups:
+            return "No categories found."
+
+        lines: list[str] = []
+        for group in groups:
+            if not group.categories:
+                continue
+            lines.append(f"**{group.name}**")
+            for cat in group.categories:
+                bal = _format_dollars(cat.balance)
+                lines.append(
+                    f"  - {cat.name}: {bal}\n"
+                    f"    ID: `{cat.id}`"
+                )
+        if not lines:
+            return "No categories found."
+        return "\n".join(lines)
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+    finally:
+        await client.close()
+
+
+@mcp.tool()
+async def list_payees(budget_id: str | None = None) -> str:
+    """List all payees for a YNAB budget.
+
+    Returns payee names and IDs.
+
+    Args:
+        budget_id: Budget ID to list payees for.
+            If not provided, uses the default budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+
+    try:
+        client = YNABClient()
+    except ValueError:
+        return (
+            "Configuration error: YNAB access token not found. "
+            "Set the YNAB_ACCESS_TOKEN environment variable."
+        )
+
+    try:
+        payees = await client.get_payees(bid)
+
+        if not payees:
+            return "No payees found."
+
+        lines: list[str] = []
+        for payee in payees:
+            lines.append(
+                f"- {payee.name}\n"
+                f"  ID: `{payee.id}`"
             )
         return "\n".join(lines)
     except YNABError as e:
