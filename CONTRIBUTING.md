@@ -5,7 +5,7 @@ Thanks for your interest in contributing! Here's how to get started.
 ## Development Setup
 
 ```bash
-git clone https://github.com/duges/py-ynab-mcp.git
+git clone https://github.com/duganth/py-ynab-mcp.git
 cd py-ynab-mcp
 uv sync
 ```

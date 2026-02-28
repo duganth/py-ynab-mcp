@@ -1,5 +1,10 @@
 # TODO
 
+## Medium
+
+- [ ] Delta sync — pass `last_knowledge_of_server` on GET endpoints to only fetch changed records. Mainly useful for `/ynab-sync` automation, not conversational use. YNAB API supports it on most list endpoints.
+  - Files: `src/py_ynab_mcp/client.py`, `src/py_ynab_mcp/server.py`, `src/py_ynab_mcp/models.py`.
+
 ## Low
 
 - [ ] Decide whether UUID validation should accept uppercase UUID strings and update regex validation consistently across server/client if yes.

@@ -2,6 +2,8 @@
 
 from decimal import Decimal
 
+import pytest
+
 from py_ynab_mcp.models import (
     Account,
     AccountDetail,
@@ -16,6 +18,7 @@ from py_ynab_mcp.models import (
     MonthSummary,
     Payee,
     PayeeDetail,
+    PayeeUpdate,
     ScheduledSubTransaction,
     ScheduledTransaction,
     ScheduledTransactionUpdate,
@@ -73,6 +76,16 @@ class TestDollarsToMilliunits:
             assert dollars_to_milliunits(
                 milliunits_to_dollars(v)
             ) == v
+
+    def test_rejects_four_decimal_places(self) -> None:
+        with pytest.raises(
+            ValueError, match="more than 3 decimal places"
+        ):
+            dollars_to_milliunits(Decimal("1.2345"))
+
+    def test_rejects_many_decimal_places(self) -> None:
+        with pytest.raises(ValueError):
+            dollars_to_milliunits(Decimal("0.00001"))
 
 
 class TestBudgetSummaryModel:
@@ -624,3 +637,10 @@ class TestPayeeDetailModel:
             transfer_account_id=None,
         )
         assert payee.transfer_account_id is None
+
+
+class TestPayeeUpdateModel:
+    def test_name_field(self) -> None:
+        u = PayeeUpdate(name="Costco Wholesale")
+        assert u.name == "Costco Wholesale"
+        assert u.model_dump() == {"name": "Costco Wholesale"}

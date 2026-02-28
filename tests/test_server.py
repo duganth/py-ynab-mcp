@@ -11,7 +11,7 @@ from py_ynab_mcp.models import (
     AccountDetail,
     BudgetSettings,
     BudgetSummary,
-    BulkResult,
+    BulkCreateResponse,
     Category,
     CategoryGroup,
     CurrencyFormat,
@@ -48,6 +48,7 @@ from py_ynab_mcp.server import (
     list_transactions,
     update_category,
     update_category_budget,
+    update_payee,
     update_scheduled_transaction,
     update_transaction,
 )
@@ -135,6 +136,7 @@ class TestListBudgets:
         ]
         mock_client = AsyncMock()
         mock_client.get_budgets.return_value = budgets
+        mock_client.rate_limit_remaining = None
 
         result = await list_budgets(ctx=_mock_ctx(mock_client))
 
@@ -153,6 +155,7 @@ class TestListBudgets:
         mock_client.get_budgets.return_value = [
             _make_budget()
         ]
+        mock_client.rate_limit_remaining = None
 
         result = await list_budgets(ctx=_mock_ctx(mock_client))
 
@@ -176,6 +179,7 @@ class TestListBudgets:
                 last_modified="2026-02-15T08:30:00+00:00"
             )
         ]
+        mock_client.rate_limit_remaining = None
 
         result = await list_budgets(ctx=_mock_ctx(mock_client))
 
@@ -201,7 +205,8 @@ class TestListBudgets:
 
         result = await list_budgets(ctx=_mock_ctx(mock_client))
 
-        assert "unexpected error" in result
+        assert "Unexpected error" in result
+        assert "RuntimeError" in result
 
 
 class TestListAccounts:
@@ -332,7 +337,7 @@ class TestListAccounts:
             ctx=_mock_ctx(mock_client)
         )
 
-        assert "unexpected error" in result
+        assert "Unexpected error" in result
 
 
 class TestListCategories:
@@ -472,7 +477,7 @@ class TestListCategories:
             ctx=_mock_ctx(mock_client)
         )
 
-        assert "unexpected error" in result
+        assert "Unexpected error" in result
 
 
 class TestListPayees:
@@ -566,7 +571,7 @@ class TestListPayees:
             ctx=_mock_ctx(mock_client)
         )
 
-        assert "unexpected error" in result
+        assert "Unexpected error" in result
 
 
 def _make_month_summary(
@@ -684,7 +689,7 @@ class TestListMonths:
             ctx=_mock_ctx(mock_client)
         )
 
-        assert "unexpected error" in result
+        assert "Unexpected error" in result
 
     @pytest.mark.anyio
     async def test_uses_budget_id(self) -> None:
@@ -850,7 +855,7 @@ class TestGetMonth:
         result = await get_month(
             ctx=_mock_ctx(mock_client), month="2026-02-01"
         )
-        assert "unexpected error" in result
+        assert "Unexpected error" in result
 
     @pytest.mark.anyio
     async def test_uses_budget_id(self) -> None:
@@ -1082,7 +1087,7 @@ class TestListTransactions:
             since_date="2026-02-01",
         )
 
-        assert "unexpected error" in result
+        assert "Unexpected error" in result
 
     @pytest.mark.anyio
     async def test_transaction_ids_in_output(self) -> None:
@@ -1302,7 +1307,7 @@ class TestCreateTransaction:
 class TestCreateTransactions:
     @pytest.mark.anyio
     async def test_bulk_create(self) -> None:
-        bulk = BulkResult(
+        bulk = BulkCreateResponse(
             transaction_ids=["txn-1", "txn-2"],
             duplicate_import_ids=[],
         )
@@ -1408,7 +1413,7 @@ class TestCreateTransactions:
 
     @pytest.mark.anyio
     async def test_duplicates_reported(self) -> None:
-        bulk = BulkResult(
+        bulk = BulkCreateResponse(
             transaction_ids=["txn-1"],
             duplicate_import_ids=["dup-1"],
         )
@@ -1718,7 +1723,8 @@ class TestUpdateCategoryBudget:
             amount="500.00",
         )
 
-        assert "unexpected error" in result
+        assert "Unexpected error" in result
+        assert "RuntimeError" in result
 
 
 class TestUpdateCategory:
@@ -1859,7 +1865,8 @@ class TestUpdateCategory:
             name="Test",
         )
 
-        assert "unexpected error" in result
+        assert "Unexpected error" in result
+        assert "RuntimeError" in result
 
 
 # --- Scheduled transaction test helpers ---
@@ -2827,3 +2834,245 @@ class TestGetTransaction:
         )
 
         assert "Not found" in result
+
+
+# --- update_payee ---
+
+
+class TestUpdatePayee:
+    @pytest.mark.anyio
+    async def test_renames_payee(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_payee.return_value = PayeeDetail(
+            id=_VALID_UUID,
+            name="Costco Wholesale",
+            deleted=False,
+            transfer_account_id=None,
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await update_payee(
+            ctx=_mock_ctx(mock_client),
+            payee_id=_VALID_UUID,
+            name="Costco Wholesale",
+        )
+
+        assert "Renamed" in result
+        assert "Costco Wholesale" in result
+
+    @pytest.mark.anyio
+    async def test_dry_run(self) -> None:
+        result = await update_payee(
+            ctx=_mock_ctx(),
+            payee_id=_VALID_UUID,
+            name="New Name",
+            dry_run=True,
+        )
+
+        assert "[DRY RUN]" in result
+        assert "New Name" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_payee_id(self) -> None:
+        result = await update_payee(
+            ctx=_mock_ctx(),
+            payee_id="bad",
+            name="Test",
+        )
+
+        assert "Invalid payee_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await update_payee(
+            ctx=_mock_ctx(),
+            payee_id=_VALID_UUID,
+            name="Test",
+            budget_id="bad",
+        )
+
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_empty_name(self) -> None:
+        result = await update_payee(
+            ctx=_mock_ctx(),
+            payee_id=_VALID_UUID,
+            name="",
+        )
+
+        assert "empty" in result
+
+    @pytest.mark.anyio
+    async def test_whitespace_name(self) -> None:
+        result = await update_payee(
+            ctx=_mock_ctx(),
+            payee_id=_VALID_UUID,
+            name="   ",
+        )
+
+        assert "empty" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_payee.side_effect = YNABError(
+            404, "Payee not found"
+        )
+
+        result = await update_payee(
+            ctx=_mock_ctx(mock_client),
+            payee_id=_VALID_UUID,
+            name="Test",
+        )
+
+        assert "Payee not found" in result
+
+    @pytest.mark.anyio
+    async def test_unexpected_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_payee.side_effect = (
+            RuntimeError("boom")
+        )
+
+        result = await update_payee(
+            ctx=_mock_ctx(mock_client),
+            payee_id=_VALID_UUID,
+            name="Test",
+        )
+
+        assert "Unexpected error" in result
+        assert "RuntimeError" in result
+
+    @pytest.mark.anyio
+    async def test_rate_limit_warning(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_payee.return_value = PayeeDetail(
+            id=_VALID_UUID,
+            name="New",
+            deleted=False,
+            transfer_account_id=None,
+        )
+        mock_client.rate_limit_remaining = 10
+
+        result = await update_payee(
+            ctx=_mock_ctx(mock_client),
+            payee_id=_VALID_UUID,
+            name="New",
+        )
+
+        assert "Rate limit" in result
+        assert "10/200" in result
+
+
+# --- pre-release fix validation tests ---
+
+
+class TestDefaultBudgetId:
+    @pytest.mark.anyio
+    async def test_default_budget_id_accepted(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_accounts.return_value = []
+
+        result = await list_accounts(
+            ctx=_mock_ctx(mock_client),
+            budget_id="default",
+        )
+
+        assert "No open accounts" in result
+        mock_client.get_accounts.assert_called_once_with(
+            "default"
+        )
+
+
+class TestFeb31Rejected:
+    @pytest.mark.anyio
+    async def test_feb_31_returns_error(self) -> None:
+        result = await create_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="-42.50",
+            date="2026-02-31",
+        )
+        assert "Invalid date" in result
+        assert "valid calendar date" in result
+
+    @pytest.mark.anyio
+    async def test_apr_31_returns_error(self) -> None:
+        result = await create_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="-42.50",
+            date="2026-04-31",
+        )
+        assert "Invalid date" in result
+
+    @pytest.mark.anyio
+    async def test_valid_feb_28(self) -> None:
+        """Feb 28 should pass date validation (hit API)."""
+        mock_client = AsyncMock()
+        txn = _make_transaction()
+        mock_client.create_transaction.return_value = txn
+        mock_client.rate_limit_remaining = None
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-42.50",
+            date="2026-02-28",
+        )
+
+        assert "Created transaction" in result
+
+
+class TestTooManyDecimalPlaces:
+    @pytest.mark.anyio
+    async def test_four_decimal_places_rejected(self) -> None:
+        result = await create_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="-42.1234",
+            date="2026-02-25",
+        )
+
+        assert "Invalid amount" in result
+        assert "decimal" in result.lower()
+
+    @pytest.mark.anyio
+    async def test_three_decimal_places_accepted(self) -> None:
+        mock_client = AsyncMock()
+        txn = _make_transaction()
+        mock_client.create_transaction.return_value = txn
+        mock_client.rate_limit_remaining = None
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-42.123",
+            date="2026-02-25",
+        )
+
+        assert "Created transaction" in result
+
+
+class TestListBudgetsRateLimit:
+    @pytest.mark.anyio
+    async def test_rate_limit_warning_shown(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_budgets.return_value = [
+            BudgetSummary(
+                id="b-1",
+                name="My Budget",
+                last_modified_on="2026-02-28T12:00:00+00:00",
+                first_month="2024-01-01",
+                last_month="2026-02-01",
+            ),
+        ]
+        mock_client.rate_limit_remaining = 10
+
+        result = await list_budgets(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "Rate limit" in result
+        assert "10/200" in result

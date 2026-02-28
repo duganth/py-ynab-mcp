@@ -17,8 +17,14 @@ def dollars_to_milliunits(dollars: Decimal) -> int:
     """Convert dollar amount to YNAB milliunits.
 
     $10.00 = 10000 milliunits.
+    Raises ValueError if amount has more than 3 decimal places.
     """
-    return int(dollars * Decimal(1000))
+    result = dollars * Decimal(1000)
+    if result != result.to_integral_value():
+        raise ValueError(
+            f"Amount {dollars} has more than 3 decimal places"
+        )
+    return int(result)
 
 
 # --- User models ---
@@ -208,17 +214,15 @@ class TransactionsResponse(BaseModel):
     transactions: list[Transaction]
 
 
-class BulkResult(BaseModel):
-    """Result of a bulk transaction create."""
+class BulkCreateResponse(BaseModel):
+    """Wrapper for bulk create endpoint response.
+
+    YNAB returns transaction_ids and duplicate_import_ids
+    directly on the data object (no 'bulk' wrapper).
+    """
 
     transaction_ids: list[str]
-    duplicate_import_ids: list[str]
-
-
-class BulkCreateResponse(BaseModel):
-    """Wrapper for bulk create endpoint response."""
-
-    bulk: BulkResult
+    duplicate_import_ids: list[str] = []
 
 
 # --- Category models ---
@@ -339,6 +343,12 @@ class PayeeDetail(Payee):
     """A YNAB payee with additional detail fields."""
 
     transfer_account_id: str | None
+
+
+class PayeeUpdate(BaseModel):
+    """Request model for updating a payee."""
+
+    name: str
 
 
 class PayeesResponse(BaseModel):

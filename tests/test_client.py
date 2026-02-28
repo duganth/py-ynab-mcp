@@ -8,6 +8,7 @@ import pytest
 
 from py_ynab_mcp.client import YNABClient, YNABError
 from py_ynab_mcp.models import (
+    PayeeUpdate,
     ScheduledTransactionUpdate,
     ScheduledTransactionWrite,
     TransactionUpdate,
@@ -463,10 +464,8 @@ class TestCreateTransactions:
     ) -> None:
         mock_data: dict[str, object] = {
             "data": {
-                "bulk": {
-                    "transaction_ids": ["txn-1", "txn-2"],
-                    "duplicate_import_ids": [],
-                }
+                "transaction_ids": ["txn-1", "txn-2"],
+                "duplicate_import_ids": [],
             }
         }
         with patch.object(
@@ -500,10 +499,8 @@ class TestCreateTransactions:
     ) -> None:
         mock_data: dict[str, object] = {
             "data": {
-                "bulk": {
-                    "transaction_ids": ["txn-1"],
-                    "duplicate_import_ids": ["import-dup"],
-                }
+                "transaction_ids": ["txn-1"],
+                "duplicate_import_ids": ["import-dup"],
             }
         }
         with patch.object(
@@ -1854,3 +1851,87 @@ class TestGetTransaction:
             await client.get_transaction(
                 "bad", _VALID_UUID_2
             )
+
+
+class TestUpdatePayee:
+    @pytest.mark.anyio
+    async def test_renames_payee(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "payee": {
+                    "id": _VALID_UUID_2,
+                    "name": "New Name",
+                    "deleted": False,
+                    "transfer_account_id": None,
+                }
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.update_payee(
+                _VALID_UUID,
+                _VALID_UUID_2,
+                PayeeUpdate(name="New Name"),
+            )
+
+        assert result.id == _VALID_UUID_2
+        assert result.name == "New Name"
+        call_args = mock_req.call_args
+        assert call_args[0][0] == "PATCH"
+        assert "/payees/" in call_args[0][1]
+
+    @pytest.mark.anyio
+    async def test_invalid_payee_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid payee_id"
+        ):
+            await client.update_payee(
+                _VALID_UUID,
+                "bad-id",
+                PayeeUpdate(name="Test"),
+            )
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.update_payee(
+                "bad",
+                _VALID_UUID_2,
+                PayeeUpdate(name="Test"),
+            )
+
+
+class TestDefaultBudgetId:
+    @pytest.mark.anyio
+    async def test_default_accepted(
+        self, client: YNABClient
+    ) -> None:
+        """budget_id='default' should be accepted."""
+        mock_data: dict[str, object] = {
+            "data": {"accounts": []}
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.get_accounts("default")
+
+        assert result == []
+        call_args = mock_req.call_args
+        assert "/budgets/default/" in call_args[0][1]

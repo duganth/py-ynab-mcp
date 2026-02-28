@@ -16,7 +16,6 @@ from py_ynab_mcp.models import (
     BudgetSummary,
     BudgetSummaryResponse,
     BulkCreateResponse,
-    BulkResult,
     CategoriesResponse,
     Category,
     CategoryBudgetWrite,
@@ -31,6 +30,7 @@ from py_ynab_mcp.models import (
     PayeeDetail,
     PayeeDetailResponse,
     PayeesResponse,
+    PayeeUpdate,
     ScheduledTransaction,
     ScheduledTransactionResponse,
     ScheduledTransactionsResponse,
@@ -49,7 +49,7 @@ YNAB_BASE_URL = "https://api.ynab.com/v1"
 
 _BUDGET_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-    r"|^last-used$"
+    r"|^last-used$|^default$"
 )
 
 _UUID_RE = re.compile(
@@ -364,7 +364,7 @@ class YNABClient:
         self,
         budget_id: str,
         transactions: list[TransactionWrite],
-    ) -> BulkResult:
+    ) -> BulkCreateResponse:
         """Create multiple transactions in bulk."""
         self._validate_budget_id(budget_id)
         data = await self._request(
@@ -381,7 +381,7 @@ class YNABClient:
             raise YNABError(
                 0, "Unexpected response format from YNAB API"
             ) from None
-        return parsed.bulk
+        return parsed
 
     async def update_transaction(
         self,
@@ -707,6 +707,28 @@ class YNABClient:
         data = await self._request(
             "GET",
             f"/budgets/{budget_id}/payees/{payee_id}",
+        )
+        try:
+            parsed = PayeeDetailResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.payee
+
+    async def update_payee(
+        self,
+        budget_id: str,
+        payee_id: str,
+        update: PayeeUpdate,
+    ) -> PayeeDetail:
+        """Update a payee (rename)."""
+        self._validate_budget_id(budget_id)
+        self._validate_payee_id(payee_id)
+        data = await self._request(
+            "PATCH",
+            f"/budgets/{budget_id}/payees/{payee_id}",
+            json={"payee": update.model_dump()},
         )
         try:
             parsed = PayeeDetailResponse.model_validate(data)

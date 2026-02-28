@@ -1,5 +1,6 @@
 """py-ynab-mcp: MCP server for YNAB."""
 
+import datetime
 import json
 import re
 from collections.abc import AsyncIterator
@@ -13,6 +14,7 @@ from py_ynab_mcp.client import YNABClient, YNABError
 from py_ynab_mcp.models import (
     CategoryBudgetWrite,
     CategoryUpdate,
+    PayeeUpdate,
     ScheduledTransactionUpdate,
     ScheduledTransactionWrite,
     Transaction,
@@ -49,7 +51,7 @@ _UUID_RE = re.compile(
 )
 _BUDGET_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-"
-    r"[0-9a-f]{12}$|^last-used$"
+    r"[0-9a-f]{12}$|^last-used$|^default$"
 )
 _CLEARED_VALUES = {"cleared", "uncleared", "reconciled"}
 _TRANSACTION_TYPE_VALUES = {"uncategorized", "unapproved"}
@@ -77,20 +79,24 @@ def _parse_amount(amount: str) -> tuple[Decimal, int] | str:
             f"Invalid amount: {amount!r}. "
             "Must be a finite number."
         )
-    return (d, dollars_to_milliunits(d))
+    try:
+        return (d, dollars_to_milliunits(d))
+    except ValueError:
+        return (
+            f"Invalid amount: {amount!r}. "
+            "Too many decimal places (max 3)."
+        )
 
 
 def _validate_date(date: str) -> str | None:
-    """Validate YYYY-MM-DD date format and value. Returns error or None."""
+    """Validate YYYY-MM-DD date format and calendar value."""
     if not _DATE_RE.match(date):
         return f"Invalid date: {date!r}. Use YYYY-MM-DD format."
     try:
         year, month, day = date.split("-")
-        _y, m, d = int(year), int(month), int(day)
+        datetime.date(int(year), int(month), int(day))
     except ValueError:
-        return f"Invalid date: {date!r}. Use YYYY-MM-DD format."
-    if not (1 <= m <= 12 and 1 <= d <= 31):
-        return f"Invalid date: {date!r}. Month/day out of range."
+        return f"Invalid date: {date!r}. Not a valid calendar date."
     return None
 
 
@@ -106,7 +112,7 @@ def _validate_budget_id(budget_id: str) -> str | None:
     if not _BUDGET_ID_RE.match(budget_id):
         return (
             f"Invalid budget_id: {budget_id!r}. "
-            "Must be a UUID or 'last-used'."
+            "Must be a UUID, 'last-used', or 'default'."
         )
     return None
 
@@ -193,11 +199,13 @@ async def list_budgets(ctx: ToolContext) -> str:
                 f"  {first} \u2013 {last}\n"
                 f"  ID: `{b.id}`"
             )
-        return "\n".join(lines)
+        response = "\n".join(lines)
+        response += _rate_limit_warning(client)
+        return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -234,8 +242,8 @@ async def list_accounts(
         return "\n".join(lines)
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -278,8 +286,8 @@ async def list_categories(
         return "\n".join(lines)
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -315,8 +323,8 @@ async def list_payees(
         return "\n".join(lines)
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -364,8 +372,8 @@ async def list_months(
         return "\n".join(lines)
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 def _validate_month(month: str) -> str | None:
@@ -438,8 +446,8 @@ async def get_month(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -541,8 +549,8 @@ async def list_transactions(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {e.__class__.__name__}"
 
 
 @mcp.tool()
@@ -638,8 +646,8 @@ async def create_transaction(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -707,10 +715,13 @@ async def create_transactions(
                 return err
 
         cleared_val = raw.get("cleared")
-        if cleared_val:
-            err = _validate_cleared(str(cleared_val))
+        if cleared_val is not None:
+            cleared_str = str(cleared_val)
+            err = _validate_cleared(cleared_str)
             if err:
                 return f"Transaction {i}: {err}"
+        else:
+            cleared_str = None
 
         writes.append(TransactionWrite(
             account_id=account_id,
@@ -719,7 +730,7 @@ async def create_transactions(
             payee_name=raw.get("payee_name"),
             category_id=category_id,
             memo=raw.get("memo"),
-            cleared=raw.get("cleared"),
+            cleared=cleared_str,
             approved=raw.get("approved"),
         ))
 
@@ -755,8 +766,8 @@ async def create_transactions(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -876,8 +887,8 @@ async def update_transaction(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -916,8 +927,8 @@ async def delete_transaction(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -976,8 +987,8 @@ async def update_category_budget(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1046,8 +1057,8 @@ async def update_category(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 # --- Scheduled transaction tools ---
@@ -1141,8 +1152,8 @@ async def list_scheduled_transactions(
         return "\n".join(lines)
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1212,8 +1223,8 @@ async def get_scheduled_transaction(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1314,8 +1325,8 @@ async def create_scheduled_transaction(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1447,8 +1458,8 @@ async def update_scheduled_transaction(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1494,8 +1505,8 @@ async def delete_scheduled_transaction(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1512,8 +1523,8 @@ async def get_user(ctx: ToolContext) -> str:
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1554,8 +1565,8 @@ async def get_budget_settings(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1615,8 +1626,8 @@ async def get_account(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1666,8 +1677,8 @@ async def get_category(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1707,8 +1718,54 @@ async def get_payee(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
+
+
+@mcp.tool()
+async def update_payee(
+    ctx: ToolContext,
+    payee_id: str,
+    name: str,
+    budget_id: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Update a YNAB payee (rename).
+
+    Args:
+        payee_id: Payee UUID.
+        name: New name for the payee.
+        budget_id: Budget ID. Defaults to last-used budget.
+        dry_run: Validate and preview without updating.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(payee_id, "payee_id")
+    if err:
+        return err
+    if not name or not name.strip():
+        return "Payee name cannot be empty."
+
+    if dry_run:
+        return (
+            f"[DRY RUN] Would rename payee {payee_id} "
+            f"to {name!r}."
+        )
+
+    try:
+        client = _get_client(ctx)
+        payee = await client.update_payee(
+            bid, payee_id, PayeeUpdate(name=name.strip())
+        )
+        response = f"Renamed payee to **{payee.name}**."
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 @mcp.tool()
@@ -1755,8 +1812,8 @@ async def get_transaction(
         return response
     except YNABError as e:
         return f"YNAB API error: {e.detail}"
-    except Exception:
-        return "An unexpected error occurred."
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
 
 
 def main() -> None:

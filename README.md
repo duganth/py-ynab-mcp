@@ -8,6 +8,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for [YNAB (Yo
 - Get single-resource details (account, category, payee, transaction)
 - Create, update, and delete transactions (single and bulk)
 - Update category budgets and metadata
+- Rename payees
 - Manage scheduled transactions (full CRUD)
 - Budget settings and user info
 
@@ -44,16 +45,16 @@ pip install py-ynab-mcp
 
 ## Why this project?
 
-There are several YNAB MCP servers out there. Here's why we built another one:
+There are several YNAB MCP servers out there:
 
-| Project | Language | Notes |
+| Project | Language | License |
 |---|---|---|
-| [calebl/ynab-mcp-server](https://github.com/calebl/ynab-mcp-server) | TypeScript | Full CRUD, but inconsistent code quality |
-| [mattweg/ynab-mcp](https://github.com/mattweg/ynab-mcp) | JavaScript | Has known bugs (amount parsing), dormant since mid-2025 |
-| [chrisguidry/you-need-an-mcp](https://github.com/chrisguidry/you-need-an-mcp) | Python | Excellent code quality, but no OSS license |
-| **py-ynab-mcp** | Python | MIT licensed, full API coverage, actively maintained |
+| [calebl/ynab-mcp-server](https://github.com/calebl/ynab-mcp-server) | TypeScript | MIT |
+| [mattweg/ynab-mcp](https://github.com/mattweg/ynab-mcp) | JavaScript | MIT |
+| [chrisguidry/you-need-an-mcp](https://github.com/chrisguidry/you-need-an-mcp) | Python | No license |
+| **py-ynab-mcp** | Python | MIT |
 
-We wanted a Python MCP server for YNAB that is properly licensed, well-tested, and covers the full YNAB API — including write operations for transaction management. The best existing implementation had no license, making it unsuitable for use or contribution. So here we are.
+We wanted an MIT-licensed Python implementation with full API coverage and thorough test coverage. At the time of writing, the only Python option had no OSS license, so we built this one.
 
 ## YNAB API Coverage
 
@@ -66,18 +67,19 @@ We wanted a Python MCP server for YNAB that is properly licensed, well-tested, a
 ### Write
 - Create, update, delete transactions (single and bulk)
 - Update category budgets and metadata
+- Rename payees
 - Create, update, delete scheduled transactions
 
 ### Not available in YNAB API
 - Create/delete budgets, categories, or accounts
-- Create/update/delete payees (auto-created via transactions)
+- Create/delete payees (auto-created via transactions)
 - Transaction import
 
 ## Development
 
 ```bash
 # Clone and install
-git clone https://github.com/duges/py-ynab-mcp.git
+git clone https://github.com/duganth/py-ynab-mcp.git
 cd py-ynab-mcp
 uv sync
 
