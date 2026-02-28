@@ -311,6 +311,129 @@ async def list_payees(
 
 
 @mcp.tool()
+async def list_months(
+    ctx: ToolContext, budget_id: str | None = None
+) -> str:
+    """List all budget months with summary figures.
+
+    Returns each month's income, budgeted, activity, available
+    (to-be-budgeted), and age of money.
+
+    Args:
+        budget_id: Budget ID. If not provided, uses the default budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+
+    try:
+        client = _get_client(ctx)
+        months = await client.get_months(bid)
+
+        if not months:
+            return "No months found."
+
+        lines: list[str] = []
+        for m in months:
+            age = (
+                f"{m.age_of_money} days"
+                if m.age_of_money is not None
+                else "N/A"
+            )
+            line = (
+                f"- **{_format_month(m.month)}**: "
+                f"Income {_format_dollars(m.income)} | "
+                f"Budgeted {_format_dollars(m.budgeted)} | "
+                f"Activity {_format_dollars(m.activity)} | "
+                f"Available {_format_dollars(m.to_be_budgeted)} | "
+                f"Age of Money: {age}"
+            )
+            if m.note:
+                line += f'\n  Note: "{m.note}"'
+            lines.append(line)
+        return "\n".join(lines)
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+def _validate_month(month: str) -> str | None:
+    """Validate month param: YYYY-MM-DD or 'current'."""
+    if month == "current":
+        return None
+    return _validate_date(month)
+
+
+@mcp.tool()
+async def get_month(
+    ctx: ToolContext,
+    month: str,
+    budget_id: str | None = None,
+) -> str:
+    """Get a single budget month with per-category breakdown.
+
+    Returns the month summary (income, budgeted, activity, available)
+    plus every category's budgeted/activity/balance.
+
+    Args:
+        month: Month to retrieve (YYYY-MM-DD, first of month,
+            e.g. "2026-03-01") or "current" for the current month.
+        budget_id: Budget ID. Defaults to last-used budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_month(month)
+    if err:
+        return err
+
+    try:
+        client = _get_client(ctx)
+        detail = await client.get_month(bid, month=month)
+
+        age = (
+            f"{detail.age_of_money} days"
+            if detail.age_of_money is not None
+            else "N/A"
+        )
+        lines: list[str] = [
+            f"## {_format_month(detail.month)}",
+            "",
+            f"- Income: {_format_dollars(detail.income)}",
+            f"- Budgeted: {_format_dollars(detail.budgeted)}",
+            f"- Activity: {_format_dollars(detail.activity)}",
+            f"- Available: {_format_dollars(detail.to_be_budgeted)}",
+            f"- Age of Money: {age}",
+        ]
+        if detail.note:
+            lines.append(f'- Note: "{detail.note}"')
+
+        # List categories (YNAB returns them in group order).
+        cats = [c for c in detail.categories if not c.deleted]
+        if cats:
+            lines.append("")
+            lines.append("### Categories")
+            for cat in cats:
+                lines.append(
+                    f"- {cat.name}: "
+                    f"Budgeted {_format_dollars(cat.budgeted)} | "
+                    f"Activity {_format_dollars(cat.activity)} | "
+                    f"Balance {_format_dollars(cat.balance)}"
+                )
+
+        response = "\n".join(lines)
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
 async def list_transactions(
     ctx: ToolContext,
     since_date: str,

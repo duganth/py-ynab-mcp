@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- `list_months` MCP tool — budget month summaries with income, budgeted, activity, available, and age of money
+- `get_month` MCP tool — single month detail with per-category breakdown, supports "current" shorthand
 - `update_category_budget` MCP tool — set budgeted amount for a category in a specific month
 - `update_category` MCP tool — update category metadata (name, note, hidden) with dry-run support
 - `list_budgets` MCP tool — lists all budgets with names, IDs, date ranges, and last modified dates

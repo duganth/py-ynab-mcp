@@ -1071,3 +1071,186 @@ class TestRequestJsonBody:
         call_kwargs = mock_req.call_args[1]
         assert "json" in call_kwargs
         assert call_kwargs["json"]["transaction"]["amount"] == -42500
+
+
+class TestGetMonths:
+    @pytest.mark.anyio
+    async def test_returns_months(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "months": [
+                    {
+                        "month": "2026-02-01",
+                        "note": None,
+                        "income": 500000,
+                        "budgeted": 400000,
+                        "activity": -350000,
+                        "to_be_budgeted": 100000,
+                        "age_of_money": 45,
+                        "deleted": False,
+                    },
+                    {
+                        "month": "2026-01-01",
+                        "note": "January",
+                        "income": 600000,
+                        "budgeted": 500000,
+                        "activity": -450000,
+                        "to_be_budgeted": 50000,
+                        "age_of_money": 40,
+                        "deleted": False,
+                    },
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            months = await client.get_months(_VALID_UUID)
+
+        assert len(months) == 2
+        assert months[0].month == "2026-02-01"
+        from decimal import Decimal
+        assert months[0].income == Decimal("500")
+
+    @pytest.mark.anyio
+    async def test_filters_deleted(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "months": [
+                    {
+                        "month": "2026-02-01",
+                        "note": None,
+                        "income": 500000,
+                        "budgeted": 400000,
+                        "activity": -350000,
+                        "to_be_budgeted": 100000,
+                        "age_of_money": 45,
+                        "deleted": False,
+                    },
+                    {
+                        "month": "2025-12-01",
+                        "note": None,
+                        "income": 0,
+                        "budgeted": 0,
+                        "activity": 0,
+                        "to_be_budgeted": 0,
+                        "age_of_money": None,
+                        "deleted": True,
+                    },
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            months = await client.get_months(_VALID_UUID)
+
+        assert len(months) == 1
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.get_months("bad-id")
+
+
+class TestGetMonth:
+    @pytest.mark.anyio
+    async def test_returns_month_detail(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "month": {
+                    "month": "2026-02-01",
+                    "note": "Budget tight",
+                    "income": 500000,
+                    "budgeted": 400000,
+                    "activity": -350000,
+                    "to_be_budgeted": 100000,
+                    "age_of_money": 45,
+                    "deleted": False,
+                    "categories": [
+                        {
+                            "id": "cat-1",
+                            "name": "Groceries",
+                            "budgeted": 200000,
+                            "activity": -150000,
+                            "balance": 50000,
+                            "deleted": False,
+                        },
+                    ],
+                }
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            detail = await client.get_month(
+                _VALID_UUID, month="2026-02-01"
+            )
+
+        assert detail.month == "2026-02-01"
+        assert detail.note == "Budget tight"
+        assert len(detail.categories) == 1
+        assert detail.categories[0].name == "Groceries"
+
+    @pytest.mark.anyio
+    async def test_current_month(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "month": {
+                    "month": "2026-02-01",
+                    "note": None,
+                    "income": 0,
+                    "budgeted": 0,
+                    "activity": 0,
+                    "to_be_budgeted": 0,
+                    "age_of_money": None,
+                    "deleted": False,
+                    "categories": [],
+                }
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            await client.get_month(
+                _VALID_UUID, month="current"
+            )
+
+        call_args = mock_req.call_args
+        path = call_args[0][1]
+        assert "/months/current" in path
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.get_month(
+                "bad-id", month="2026-02-01"
+            )

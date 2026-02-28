@@ -8,6 +8,8 @@ from py_ynab_mcp.models import (
     Category,
     CategoryBudgetWrite,
     CategoryUpdate,
+    MonthDetail,
+    MonthSummary,
     Payee,
     Transaction,
     TransactionUpdate,
@@ -269,6 +271,91 @@ class TestCategoryUpdateModel:
         assert dumped == {"name": "Restaurants"}
         assert "note" not in dumped
         assert "hidden" not in dumped
+
+
+class TestMonthSummaryModel:
+    def test_milliunit_conversion(self) -> None:
+        m = MonthSummary(
+            month="2026-02-01",
+            note=None,
+            income=500000,  # type: ignore[arg-type]
+            budgeted=400000,  # type: ignore[arg-type]
+            activity=-350000,  # type: ignore[arg-type]
+            to_be_budgeted=100000,  # type: ignore[arg-type]
+            age_of_money=45,
+            deleted=False,
+        )
+        assert m.income == Decimal("500")
+        assert m.budgeted == Decimal("400")
+        assert m.activity == Decimal("-350")
+        assert m.to_be_budgeted == Decimal("100")
+
+    def test_optional_fields(self) -> None:
+        m = MonthSummary(
+            month="2026-02-01",
+            note="Test note",
+            income=Decimal("0"),
+            budgeted=Decimal("0"),
+            activity=Decimal("0"),
+            to_be_budgeted=Decimal("0"),
+            age_of_money=None,
+            deleted=False,
+        )
+        assert m.note == "Test note"
+        assert m.age_of_money is None
+
+    def test_accepts_decimal(self) -> None:
+        m = MonthSummary(
+            month="2026-02-01",
+            note=None,
+            income=Decimal("1000.50"),
+            budgeted=Decimal("800"),
+            activity=Decimal("-700"),
+            to_be_budgeted=Decimal("200.50"),
+            age_of_money=30,
+            deleted=False,
+        )
+        assert m.income == Decimal("1000.50")
+
+
+class TestMonthDetailModel:
+    def test_inherits_summary_fields(self) -> None:
+        cat = Category(
+            id="cat-1",
+            name="Groceries",
+            budgeted=Decimal("500"),
+            activity=Decimal("-250"),
+            balance=Decimal("250"),
+            deleted=False,
+        )
+        d = MonthDetail(
+            month="2026-02-01",
+            note=None,
+            income=500000,  # type: ignore[arg-type]
+            budgeted=400000,  # type: ignore[arg-type]
+            activity=-350000,  # type: ignore[arg-type]
+            to_be_budgeted=100000,  # type: ignore[arg-type]
+            age_of_money=45,
+            deleted=False,
+            categories=[cat],
+        )
+        assert d.income == Decimal("500")
+        assert len(d.categories) == 1
+        assert d.categories[0].name == "Groceries"
+
+    def test_empty_categories(self) -> None:
+        d = MonthDetail(
+            month="2026-02-01",
+            note=None,
+            income=Decimal("0"),
+            budgeted=Decimal("0"),
+            activity=Decimal("0"),
+            to_be_budgeted=Decimal("0"),
+            age_of_money=None,
+            deleted=False,
+            categories=[],
+        )
+        assert d.categories == []
 
 
 class TestPayeeModel:

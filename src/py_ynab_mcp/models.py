@@ -209,6 +209,50 @@ class CategoriesResponse(BaseModel):
     category_groups: list[CategoryGroup]
 
 
+# --- Month models ---
+
+
+class MonthSummary(BaseModel):
+    """A YNAB budget month summary."""
+
+    month: str
+    note: str | None
+    income: Decimal
+    budgeted: Decimal
+    activity: Decimal
+    to_be_budgeted: Decimal
+    age_of_money: int | None
+    deleted: bool
+
+    @field_validator(
+        "income", "budgeted", "activity", "to_be_budgeted",
+        mode="before",
+    )
+    @classmethod
+    def convert_milliunits(cls, v: int | Decimal) -> Decimal:
+        if isinstance(v, int):
+            return milliunits_to_dollars(v)
+        return v
+
+
+class MonthDetail(MonthSummary):
+    """A YNAB budget month with per-category breakdowns."""
+
+    categories: list[Category]
+
+
+class MonthsResponse(BaseModel):
+    """Wrapper for months endpoint response."""
+
+    months: list[MonthSummary]
+
+
+class MonthDetailResponse(BaseModel):
+    """Wrapper for single month endpoint response."""
+
+    month: MonthDetail
+
+
 # --- Payee models ---
 
 

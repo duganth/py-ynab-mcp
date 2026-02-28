@@ -12,6 +12,8 @@ from py_ynab_mcp.models import (
     BulkResult,
     Category,
     CategoryGroup,
+    MonthDetail,
+    MonthSummary,
     Payee,
     Transaction,
 )
@@ -19,9 +21,11 @@ from py_ynab_mcp.server import (
     create_transaction,
     create_transactions,
     delete_transaction,
+    get_month,
     list_accounts,
     list_budgets,
     list_categories,
+    list_months,
     list_payees,
     list_transactions,
     update_category,
@@ -544,6 +548,320 @@ class TestListPayees:
         )
 
         assert "unexpected error" in result
+
+
+def _make_month_summary(
+    month: str = "2026-02-01",
+    income: Decimal = Decimal("5000"),
+    budgeted: Decimal = Decimal("4000"),
+    activity: Decimal = Decimal("-3500"),
+    to_be_budgeted: Decimal = Decimal("1000"),
+    age_of_money: int | None = 45,
+    note: str | None = None,
+) -> MonthSummary:
+    return MonthSummary(
+        month=month,
+        note=note,
+        income=income,
+        budgeted=budgeted,
+        activity=activity,
+        to_be_budgeted=to_be_budgeted,
+        age_of_money=age_of_money,
+        deleted=False,
+    )
+
+
+def _make_month_detail(
+    month: str = "2026-02-01",
+    categories: list[Category] | None = None,
+    age_of_money: int | None = 45,
+    note: str | None = None,
+) -> MonthDetail:
+    return MonthDetail(
+        month=month,
+        note=note,
+        income=Decimal("5000"),
+        budgeted=Decimal("4000"),
+        activity=Decimal("-3500"),
+        to_be_budgeted=Decimal("1000"),
+        age_of_money=age_of_money,
+        deleted=False,
+        categories=categories or [],
+    )
+
+
+class TestListMonths:
+    @pytest.mark.anyio
+    async def test_returns_formatted_months(self) -> None:
+        months = [
+            _make_month_summary("2026-01-01"),
+            _make_month_summary(
+                "2026-02-01", age_of_money=50,
+                note="Good month",
+            ),
+        ]
+        mock_client = AsyncMock()
+        mock_client.get_months.return_value = months
+
+        result = await list_months(ctx=_mock_ctx(mock_client))
+
+        assert "Jan 2026" in result
+        assert "Feb 2026" in result
+        assert "$5,000.00" in result
+        assert "$4,000.00" in result
+        assert "-$3,500.00" in result
+        assert "$1,000.00" in result
+        assert "45 days" in result
+        assert "Good month" in result
+
+    @pytest.mark.anyio
+    async def test_empty_months(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_months.return_value = []
+
+        result = await list_months(ctx=_mock_ctx(mock_client))
+
+        assert "No months found" in result
+
+    @pytest.mark.anyio
+    async def test_age_of_money_none(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_months.return_value = [
+            _make_month_summary(age_of_money=None)
+        ]
+
+        result = await list_months(ctx=_mock_ctx(mock_client))
+
+        assert "N/A" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await list_months(
+            ctx=_mock_ctx(), budget_id="bad"
+        )
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_months.side_effect = YNABError(
+            500, "Server error"
+        )
+
+        result = await list_months(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "Server error" in result
+
+    @pytest.mark.anyio
+    async def test_unexpected_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_months.side_effect = RuntimeError(
+            "boom"
+        )
+
+        result = await list_months(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "unexpected error" in result
+
+    @pytest.mark.anyio
+    async def test_uses_budget_id(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_months.return_value = []
+
+        await list_months(
+            ctx=_mock_ctx(mock_client),
+            budget_id=_VALID_UUID,
+        )
+
+        mock_client.get_months.assert_called_once_with(
+            _VALID_UUID
+        )
+
+    @pytest.mark.anyio
+    async def test_defaults_to_last_used(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_months.return_value = []
+
+        await list_months(ctx=_mock_ctx(mock_client))
+
+        mock_client.get_months.assert_called_once_with(
+            "last-used"
+        )
+
+
+class TestGetMonth:
+    @pytest.mark.anyio
+    async def test_returns_formatted_detail(self) -> None:
+        cats = [
+            _make_category("Groceries"),
+            _make_category("Rent"),
+        ]
+        detail = _make_month_detail(categories=cats)
+        mock_client = AsyncMock()
+        mock_client.get_month.return_value = detail
+        mock_client.rate_limit_remaining = None
+
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-02-01"
+        )
+
+        assert "Feb 2026" in result
+        assert "$5,000.00" in result
+        assert "Groceries" in result
+        assert "Rent" in result
+        assert "Categories" in result
+
+    @pytest.mark.anyio
+    async def test_current_month(self) -> None:
+        detail = _make_month_detail()
+        mock_client = AsyncMock()
+        mock_client.get_month.return_value = detail
+        mock_client.rate_limit_remaining = None
+
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="current"
+        )
+
+        mock_client.get_month.assert_called_once_with(
+            "last-used", month="current"
+        )
+        assert "Feb 2026" in result
+
+    @pytest.mark.anyio
+    async def test_no_categories(self) -> None:
+        detail = _make_month_detail(categories=[])
+        mock_client = AsyncMock()
+        mock_client.get_month.return_value = detail
+        mock_client.rate_limit_remaining = None
+
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-02-01"
+        )
+
+        assert "Categories" not in result
+        assert "$5,000.00" in result
+
+    @pytest.mark.anyio
+    async def test_filters_deleted_categories(self) -> None:
+        cats = [
+            _make_category("Groceries"),
+            Category(
+                id="cat-del",
+                name="Deleted Cat",
+                budgeted=Decimal("0"),
+                activity=Decimal("0"),
+                balance=Decimal("0"),
+                deleted=True,
+            ),
+        ]
+        detail = _make_month_detail(categories=cats)
+        mock_client = AsyncMock()
+        mock_client.get_month.return_value = detail
+        mock_client.rate_limit_remaining = None
+
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-02-01"
+        )
+
+        assert "Groceries" in result
+        assert "Deleted Cat" not in result
+
+    @pytest.mark.anyio
+    async def test_age_of_money_none(self) -> None:
+        detail = _make_month_detail(age_of_money=None)
+        mock_client = AsyncMock()
+        mock_client.get_month.return_value = detail
+        mock_client.rate_limit_remaining = None
+
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-02-01"
+        )
+
+        assert "N/A" in result
+
+    @pytest.mark.anyio
+    async def test_with_note(self) -> None:
+        detail = _make_month_detail(note="Budget tight")
+        mock_client = AsyncMock()
+        mock_client.get_month.return_value = detail
+        mock_client.rate_limit_remaining = None
+
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-02-01"
+        )
+
+        assert "Budget tight" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_month_format(self) -> None:
+        result = await get_month(
+            ctx=_mock_ctx(), month="feb-2026"
+        )
+        assert "Invalid date" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await get_month(
+            ctx=_mock_ctx(), month="2026-02-01",
+            budget_id="bad",
+        )
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_month.side_effect = YNABError(
+            404, "Month not found"
+        )
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-02-01"
+        )
+        assert "Month not found" in result
+
+    @pytest.mark.anyio
+    async def test_unexpected_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_month.side_effect = RuntimeError(
+            "boom"
+        )
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-02-01"
+        )
+        assert "unexpected error" in result
+
+    @pytest.mark.anyio
+    async def test_uses_budget_id(self) -> None:
+        detail = _make_month_detail()
+        mock_client = AsyncMock()
+        mock_client.get_month.return_value = detail
+        mock_client.rate_limit_remaining = None
+
+        await get_month(
+            ctx=_mock_ctx(mock_client),
+            month="2026-02-01",
+            budget_id=_VALID_UUID,
+        )
+
+        mock_client.get_month.assert_called_once_with(
+            _VALID_UUID, month="2026-02-01"
+        )
+
+    @pytest.mark.anyio
+    async def test_rate_limit_warning(self) -> None:
+        detail = _make_month_detail()
+        mock_client = AsyncMock()
+        mock_client.get_month.return_value = detail
+        mock_client.rate_limit_remaining = 10
+
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-02-01"
+        )
+
+        assert "Rate limit" in result
 
 
 class TestListTransactions:

@@ -19,6 +19,10 @@ from py_ynab_mcp.models import (
     CategoryGroup,
     CategoryResponse,
     CategoryUpdate,
+    MonthDetail,
+    MonthDetailResponse,
+    MonthsResponse,
+    MonthSummary,
     Payee,
     PayeesResponse,
     Transaction,
@@ -213,6 +217,38 @@ class YNABClient:
                 0, "Unexpected response format from YNAB API"
             ) from None
         return [p for p in parsed.payees if not p.deleted]
+
+    async def get_months(
+        self, budget_id: str = "last-used"
+    ) -> list[MonthSummary]:
+        """List budget months."""
+        self._validate_budget_id(budget_id)
+        data = await self._request(
+            "GET", f"/budgets/{budget_id}/months"
+        )
+        try:
+            parsed = MonthsResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return [m for m in parsed.months if not m.deleted]
+
+    async def get_month(
+        self, budget_id: str = "last-used", *, month: str
+    ) -> MonthDetail:
+        """Get a single budget month with category breakdowns."""
+        self._validate_budget_id(budget_id)
+        data = await self._request(
+            "GET", f"/budgets/{budget_id}/months/{month}"
+        )
+        try:
+            parsed = MonthDetailResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.month
 
     async def get_transactions(
         self,
