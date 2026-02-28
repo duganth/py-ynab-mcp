@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from py_ynab_mcp.models import (
     Account,
+    BudgetSummary,
     Category,
     Payee,
     Transaction,
@@ -58,6 +59,22 @@ class TestDollarsToMilliunits:
             assert dollars_to_milliunits(
                 milliunits_to_dollars(v)
             ) == v
+
+
+class TestBudgetSummaryModel:
+    def test_all_fields(self) -> None:
+        b = BudgetSummary(
+            id="abc-123",
+            name="My Budget",
+            last_modified_on="2026-02-28T12:00:00+00:00",
+            first_month="2024-01-01",
+            last_month="2026-02-01",
+        )
+        assert b.id == "abc-123"
+        assert b.name == "My Budget"
+        assert b.last_modified_on == "2026-02-28T12:00:00+00:00"
+        assert b.first_month == "2024-01-01"
+        assert b.last_month == "2026-02-01"
 
 
 class TestAccountModel:

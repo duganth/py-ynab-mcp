@@ -54,6 +54,9 @@ class BudgetSummary(BaseModel):
 
     id: str
     name: str
+    last_modified_on: str
+    first_month: str
+    last_month: str
 
 
 class BudgetSummaryResponse(BaseModel):

@@ -72,8 +72,20 @@ class TestGetBudgets:
         mock_data: dict[str, object] = {
             "data": {
                 "budgets": [
-                    {"id": "budget-1", "name": "My Budget"},
-                    {"id": "budget-2", "name": "Joint Budget"},
+                    {
+                        "id": "budget-1",
+                        "name": "My Budget",
+                        "last_modified_on": "2026-02-28T12:00:00+00:00",
+                        "first_month": "2024-01-01",
+                        "last_month": "2026-02-01",
+                    },
+                    {
+                        "id": "budget-2",
+                        "name": "Joint Budget",
+                        "last_modified_on": "2026-02-27T08:00:00+00:00",
+                        "first_month": "2025-06-01",
+                        "last_month": "2026-03-01",
+                    },
                 ]
             }
         }

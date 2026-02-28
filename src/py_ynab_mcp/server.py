@@ -2,9 +2,12 @@
 
 import json
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from py_ynab_mcp.client import YNABClient, YNABError
 from py_ynab_mcp.models import (
@@ -14,7 +17,27 @@ from py_ynab_mcp.models import (
     dollars_to_milliunits,
 )
 
-mcp = FastMCP("py-ynab-mcp")
+# Type alias for tool context — avoids repeating generic params.
+ToolContext = Context[Any, dict[str, YNABClient], Any]
+
+
+@asynccontextmanager
+async def lifespan(server: FastMCP) -> AsyncIterator[dict[str, YNABClient]]:
+    """Manage a shared YNAB client across all tool calls."""
+    client = YNABClient()
+    try:
+        yield {"ynab_client": client}
+    finally:
+        await client.close()
+
+
+mcp = FastMCP("py-ynab-mcp", lifespan=lifespan)
+
+
+def _get_client(ctx: ToolContext) -> YNABClient:
+    """Get the shared YNAB client from the lifespan context."""
+    client: YNABClient = ctx.request_context.lifespan_context["ynab_client"]
+    return client
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _UUID_RE = re.compile(
@@ -121,8 +144,55 @@ def _format_transaction(txn: Transaction) -> str:
     return " ".join(parts)
 
 
+def _format_month(date_str: str) -> str:
+    """Format a YYYY-MM-DD date as 'Mon YYYY' (e.g. 'Jan 2024')."""
+    try:
+        year, month, _day = date_str.split("-")
+        months = [
+            "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ]
+        return f"{months[int(month)]} {year}"
+    except (ValueError, IndexError):
+        return date_str
+
+
 @mcp.tool()
-async def list_accounts(budget_id: str | None = None) -> str:
+async def list_budgets(ctx: ToolContext) -> str:
+    """List all budgets for the authenticated YNAB user.
+
+    Returns budget names, IDs, date ranges, and last modified dates.
+    Use the budget ID with other tools to target a specific budget.
+    """
+    try:
+        client = _get_client(ctx)
+        budgets = await client.get_budgets()
+
+        if not budgets:
+            return "No budgets found."
+
+        lines: list[str] = []
+        for b in budgets:
+            modified = b.last_modified_on[:10]
+            first = _format_month(b.first_month)
+            last = _format_month(b.last_month)
+            lines.append(
+                f"- **{b.name}** "
+                f"(last modified: {modified})\n"
+                f"  {first} \u2013 {last}\n"
+                f"  ID: `{b.id}`"
+            )
+        return "\n".join(lines)
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def list_accounts(
+    ctx: ToolContext, budget_id: str | None = None
+) -> str:
     """List all accounts for a YNAB budget with balances.
 
     Args:
@@ -135,14 +205,7 @@ async def list_accounts(budget_id: str | None = None) -> str:
         return err
 
     try:
-        client = YNABClient()
-    except ValueError:
-        return (
-            "Configuration error: YNAB access token not found. "
-            "Set the YNAB_ACCESS_TOKEN environment variable."
-        )
-
-    try:
+        client = _get_client(ctx)
         accounts = await client.get_accounts(bid)
 
         if not accounts:
@@ -162,12 +225,12 @@ async def list_accounts(budget_id: str | None = None) -> str:
         return f"YNAB API error: {e.detail}"
     except Exception:
         return "An unexpected error occurred."
-    finally:
-        await client.close()
 
 
 @mcp.tool()
-async def list_categories(budget_id: str | None = None) -> str:
+async def list_categories(
+    ctx: ToolContext, budget_id: str | None = None
+) -> str:
     """List all categories for a YNAB budget, grouped by category group.
 
     Returns category names and IDs needed for creating transactions.
@@ -182,14 +245,7 @@ async def list_categories(budget_id: str | None = None) -> str:
         return err
 
     try:
-        client = YNABClient()
-    except ValueError:
-        return (
-            "Configuration error: YNAB access token not found. "
-            "Set the YNAB_ACCESS_TOKEN environment variable."
-        )
-
-    try:
+        client = _get_client(ctx)
         groups = await client.get_categories(bid)
 
         if not groups:
@@ -213,12 +269,12 @@ async def list_categories(budget_id: str | None = None) -> str:
         return f"YNAB API error: {e.detail}"
     except Exception:
         return "An unexpected error occurred."
-    finally:
-        await client.close()
 
 
 @mcp.tool()
-async def list_payees(budget_id: str | None = None) -> str:
+async def list_payees(
+    ctx: ToolContext, budget_id: str | None = None
+) -> str:
     """List all payees for a YNAB budget.
 
     Returns payee names and IDs.
@@ -233,14 +289,7 @@ async def list_payees(budget_id: str | None = None) -> str:
         return err
 
     try:
-        client = YNABClient()
-    except ValueError:
-        return (
-            "Configuration error: YNAB access token not found. "
-            "Set the YNAB_ACCESS_TOKEN environment variable."
-        )
-
-    try:
+        client = _get_client(ctx)
         payees = await client.get_payees(bid)
 
         if not payees:
@@ -257,12 +306,11 @@ async def list_payees(budget_id: str | None = None) -> str:
         return f"YNAB API error: {e.detail}"
     except Exception:
         return "An unexpected error occurred."
-    finally:
-        await client.close()
 
 
 @mcp.tool()
 async def list_transactions(
+    ctx: ToolContext,
     since_date: str,
     account_id: str | None = None,
     category_id: str | None = None,
@@ -321,14 +369,7 @@ async def list_transactions(
             return err
 
     try:
-        client = YNABClient()
-    except ValueError:
-        return (
-            "Configuration error: YNAB access token not found. "
-            "Set the YNAB_ACCESS_TOKEN environment variable."
-        )
-
-    try:
+        client = _get_client(ctx)
         transactions = await client.get_transactions(
             bid,
             since_date=since_date,
@@ -368,12 +409,11 @@ async def list_transactions(
         return f"YNAB API error: {e.detail}"
     except Exception:
         return "An unexpected error occurred."
-    finally:
-        await client.close()
 
 
 @mcp.tool()
 async def create_transaction(
+    ctx: ToolContext,
     account_id: str,
     amount: str,
     date: str,
@@ -454,14 +494,7 @@ async def create_transaction(
         return "\n".join(lines)
 
     try:
-        client = YNABClient()
-    except ValueError:
-        return (
-            "Configuration error: YNAB access token not found. "
-            "Set the YNAB_ACCESS_TOKEN environment variable."
-        )
-
-    try:
+        client = _get_client(ctx)
         created = await client.create_transaction(bid, txn)
         response = (
             f"Created transaction {created.id}: "
@@ -473,12 +506,11 @@ async def create_transaction(
         return f"YNAB API error: {e.detail}"
     except Exception:
         return "An unexpected error occurred."
-    finally:
-        await client.close()
 
 
 @mcp.tool()
 async def create_transactions(
+    ctx: ToolContext,
     transactions_json: str,
     budget_id: str | None = None,
     dry_run: bool = False,
@@ -571,14 +603,7 @@ async def create_transactions(
         return header + "\n" + "\n".join(previews)
 
     try:
-        client = YNABClient()
-    except ValueError:
-        return (
-            "Configuration error: YNAB access token not found. "
-            "Set the YNAB_ACCESS_TOKEN environment variable."
-        )
-
-    try:
+        client = _get_client(ctx)
         result = await client.create_transactions(bid, writes)
         lines = [
             f"Created {len(result.transaction_ids)} transactions."
@@ -598,12 +623,11 @@ async def create_transactions(
         return f"YNAB API error: {e.detail}"
     except Exception:
         return "An unexpected error occurred."
-    finally:
-        await client.close()
 
 
 @mcp.tool()
 async def update_transaction(
+    ctx: ToolContext,
     transaction_id: str,
     account_id: str | None = None,
     amount: str | None = None,
@@ -708,14 +732,7 @@ async def update_transaction(
         return header + "\n" + "\n".join(preview_lines)
 
     try:
-        client = YNABClient()
-    except ValueError:
-        return (
-            "Configuration error: YNAB access token not found. "
-            "Set the YNAB_ACCESS_TOKEN environment variable."
-        )
-
-    try:
+        client = _get_client(ctx)
         updated = await client.update_transaction(bid, txn_update)
         response = (
             f"Updated transaction {updated.id}: "
@@ -727,12 +744,11 @@ async def update_transaction(
         return f"YNAB API error: {e.detail}"
     except Exception:
         return "An unexpected error occurred."
-    finally:
-        await client.close()
 
 
 @mcp.tool()
 async def delete_transaction(
+    ctx: ToolContext,
     transaction_id: str,
     budget_id: str | None = None,
     dry_run: bool = False,
@@ -759,14 +775,7 @@ async def delete_transaction(
         )
 
     try:
-        client = YNABClient()
-    except ValueError:
-        return (
-            "Configuration error: YNAB access token not found. "
-            "Set the YNAB_ACCESS_TOKEN environment variable."
-        )
-
-    try:
+        client = _get_client(ctx)
         await client.delete_transaction(bid, transaction_id)
         response = f"Deleted transaction {transaction_id}."
         response += _rate_limit_warning(client)
@@ -775,8 +784,6 @@ async def delete_transaction(
         return f"YNAB API error: {e.detail}"
     except Exception:
         return "An unexpected error occurred."
-    finally:
-        await client.close()
 
 
 def main() -> None:
