@@ -7,7 +7,12 @@ import httpx
 import pytest
 
 from py_ynab_mcp.client import YNABClient, YNABError
-from py_ynab_mcp.models import TransactionUpdate, TransactionWrite
+from py_ynab_mcp.models import (
+    ScheduledTransactionUpdate,
+    ScheduledTransactionWrite,
+    TransactionUpdate,
+    TransactionWrite,
+)
 
 
 @pytest.fixture
@@ -1253,4 +1258,286 @@ class TestGetMonth:
         ):
             await client.get_month(
                 "bad-id", month="2026-02-01"
+            )
+
+
+def _scheduled_txn_data(
+    st_id: str = "st-1",
+) -> dict[str, object]:
+    """Build mock scheduled transaction data."""
+    return {
+        "id": st_id,
+        "date_first": "2026-03-01",
+        "date_next": "2026-04-01",
+        "frequency": "monthly",
+        "amount": -150000,
+        "memo": "Rent",
+        "flag_color": None,
+        "account_id": _VALID_UUID,
+        "account_name": "Checking",
+        "payee_id": None,
+        "payee_name": "Landlord",
+        "category_id": None,
+        "category_name": "Rent",
+        "transfer_account_id": None,
+        "subtransactions": [],
+        "deleted": False,
+    }
+
+
+class TestGetScheduledTransactions:
+    @pytest.mark.anyio
+    async def test_returns_scheduled(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "scheduled_transactions": [
+                    _scheduled_txn_data("st-1"),
+                    _scheduled_txn_data("st-2"),
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.get_scheduled_transactions(
+                _VALID_UUID
+            )
+
+        assert len(result) == 2
+        assert result[0].id == "st-1"
+        from decimal import Decimal
+        assert result[0].amount == Decimal("-150")
+
+    @pytest.mark.anyio
+    async def test_filters_deleted(
+        self, client: YNABClient
+    ) -> None:
+        deleted = _scheduled_txn_data("st-del")
+        deleted["deleted"] = True
+        mock_data: dict[str, object] = {
+            "data": {
+                "scheduled_transactions": [
+                    _scheduled_txn_data("st-1"),
+                    deleted,
+                ]
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.get_scheduled_transactions(
+                _VALID_UUID
+            )
+
+        assert len(result) == 1
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.get_scheduled_transactions("bad")
+
+
+class TestGetScheduledTransaction:
+    @pytest.mark.anyio
+    async def test_returns_single(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "scheduled_transaction": (
+                    _scheduled_txn_data(_VALID_UUID_2)
+                )
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = (
+                await client.get_scheduled_transaction(
+                    _VALID_UUID, _VALID_UUID_2
+                )
+            )
+
+        assert result.id == _VALID_UUID_2
+        assert result.frequency == "monthly"
+
+    @pytest.mark.anyio
+    async def test_invalid_scheduled_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError,
+            match="Invalid scheduled_transaction_id",
+        ):
+            await client.get_scheduled_transaction(
+                _VALID_UUID, "bad-id"
+            )
+
+
+class TestCreateScheduledTransaction:
+    @pytest.mark.anyio
+    async def test_creates(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "scheduled_transaction": (
+                    _scheduled_txn_data("st-new")
+                )
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            write = ScheduledTransactionWrite(
+                account_id=_VALID_UUID,
+                date="2026-03-01",
+                amount=-150000,
+                frequency="monthly",
+                payee_name="Landlord",
+            )
+            result = (
+                await client.create_scheduled_transaction(
+                    _VALID_UUID, write
+                )
+            )
+
+        assert result.id == "st-new"
+        call_args = mock_req.call_args
+        assert call_args[0][0] == "POST"
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        write = ScheduledTransactionWrite(
+            account_id=_VALID_UUID,
+            date="2026-03-01",
+            amount=-150000,
+            frequency="monthly",
+        )
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.create_scheduled_transaction(
+                "bad", write
+            )
+
+
+class TestUpdateScheduledTransaction:
+    @pytest.mark.anyio
+    async def test_updates(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "scheduled_transaction": (
+                    _scheduled_txn_data(_VALID_UUID_2)
+                )
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            update = ScheduledTransactionUpdate(
+                amount=-200000,
+            )
+            result = (
+                await client.update_scheduled_transaction(
+                    _VALID_UUID, _VALID_UUID_2, update
+                )
+            )
+
+        assert result.id == _VALID_UUID_2
+        call_args = mock_req.call_args
+        assert call_args[0][0] == "PUT"
+
+    @pytest.mark.anyio
+    async def test_invalid_scheduled_id(
+        self, client: YNABClient
+    ) -> None:
+        update = ScheduledTransactionUpdate(amount=-200000)
+        with pytest.raises(
+            YNABError,
+            match="Invalid scheduled_transaction_id",
+        ):
+            await client.update_scheduled_transaction(
+                _VALID_UUID, "bad-id", update
+            )
+
+
+class TestDeleteScheduledTransaction:
+    @pytest.mark.anyio
+    async def test_deletes(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "scheduled_transaction": (
+                    _scheduled_txn_data(_VALID_UUID_2)
+                )
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            await client.delete_scheduled_transaction(
+                _VALID_UUID, _VALID_UUID_2
+            )
+
+        call_args = mock_req.call_args
+        assert call_args[0][0] == "DELETE"
+        assert _VALID_UUID_2 in call_args[0][1]
+
+    @pytest.mark.anyio
+    async def test_invalid_scheduled_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError,
+            match="Invalid scheduled_transaction_id",
+        ):
+            await client.delete_scheduled_transaction(
+                _VALID_UUID, "bad-id"
+            )
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.delete_scheduled_transaction(
+                "bad", _VALID_UUID_2
             )

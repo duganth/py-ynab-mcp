@@ -13,6 +13,8 @@ from py_ynab_mcp.client import YNABClient, YNABError
 from py_ynab_mcp.models import (
     CategoryBudgetWrite,
     CategoryUpdate,
+    ScheduledTransactionUpdate,
+    ScheduledTransactionWrite,
     Transaction,
     TransactionUpdate,
     TransactionWrite,
@@ -1032,6 +1034,454 @@ async def update_category(
         response = (
             f"Updated category {updated.name}: "
             f"{', '.join(changes)}"
+        )
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+# --- Scheduled transaction tools ---
+
+_FREQUENCY_VALUES = {
+    "never", "daily", "weekly", "everyOtherWeek",
+    "twiceAMonth", "every4Weeks", "monthly",
+    "everyOtherMonth", "every3Months", "every4Months",
+    "twiceAYear", "yearly", "everyOtherYear",
+}
+
+_FREQUENCY_LABELS: dict[str, str] = {
+    "never": "Never",
+    "daily": "Daily",
+    "weekly": "Weekly",
+    "everyOtherWeek": "Every other week",
+    "twiceAMonth": "Twice a month",
+    "every4Weeks": "Every 4 weeks",
+    "monthly": "Monthly",
+    "everyOtherMonth": "Every other month",
+    "every3Months": "Every 3 months",
+    "every4Months": "Every 4 months",
+    "twiceAYear": "Twice a year",
+    "yearly": "Yearly",
+    "everyOtherYear": "Every other year",
+}
+
+
+def _format_frequency(frequency: str) -> str:
+    """Convert YNAB frequency value to human-readable label."""
+    return _FREQUENCY_LABELS.get(frequency, frequency)
+
+
+def _validate_frequency(frequency: str) -> str | None:
+    """Validate frequency value. Returns error or None."""
+    if frequency not in _FREQUENCY_VALUES:
+        return (
+            f"Invalid frequency: {frequency!r}. "
+            f"Must be one of: {', '.join(sorted(_FREQUENCY_VALUES))}."
+        )
+    return None
+
+
+@mcp.tool()
+async def list_scheduled_transactions(
+    ctx: ToolContext, budget_id: str | None = None
+) -> str:
+    """List all scheduled transactions for a YNAB budget.
+
+    Returns each scheduled transaction with its frequency, next date,
+    amount, payee, and category.
+
+    Args:
+        budget_id: Budget ID. If not provided, uses the default budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+
+    try:
+        client = _get_client(ctx)
+        scheduled = await client.get_scheduled_transactions(
+            bid
+        )
+
+        if not scheduled:
+            return "No scheduled transactions found."
+
+        # Sort by next date.
+        scheduled.sort(key=lambda st: st.date_next)
+
+        lines: list[str] = []
+        for st in scheduled:
+            parts = [
+                f"**{_format_dollars(st.amount)}**",
+                f"{_format_frequency(st.frequency)}",
+            ]
+            if st.payee_name:
+                parts.append(f"to {st.payee_name}")
+            if st.category_name:
+                parts.append(f"({st.category_name})")
+            parts.append(f"— next: {st.date_next}")
+            if st.memo:
+                parts.append(f'"{st.memo}"')
+            line = (
+                f"- {' '.join(parts)}\n"
+                f"  ID: `{st.id}`"
+            )
+            lines.append(line)
+        return "\n".join(lines)
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def get_scheduled_transaction(
+    ctx: ToolContext,
+    scheduled_transaction_id: str,
+    budget_id: str | None = None,
+) -> str:
+    """Get details of a single scheduled transaction.
+
+    Returns full detail including subtransactions if present.
+
+    Args:
+        scheduled_transaction_id: Scheduled transaction UUID.
+        budget_id: Budget ID. Defaults to last-used budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(
+        scheduled_transaction_id, "scheduled_transaction_id"
+    )
+    if err:
+        return err
+
+    try:
+        client = _get_client(ctx)
+        st = await client.get_scheduled_transaction(
+            bid, scheduled_transaction_id
+        )
+
+        lines: list[str] = [
+            f"**{_format_dollars(st.amount)}** "
+            f"{_format_frequency(st.frequency)}",
+            "",
+            f"- Account: {st.account_name}",
+            f"- First date: {st.date_first}",
+            f"- Next date: {st.date_next}",
+        ]
+        if st.payee_name:
+            lines.append(f"- Payee: {st.payee_name}")
+        if st.category_name:
+            lines.append(f"- Category: {st.category_name}")
+        if st.memo:
+            lines.append(f'- Memo: "{st.memo}"')
+        if st.flag_color:
+            lines.append(f"- Flag: {st.flag_color}")
+        lines.append(f"- ID: `{st.id}`")
+
+        subs = [
+            s for s in st.subtransactions if not s.deleted
+        ]
+        if subs:
+            lines.append("")
+            lines.append("### Subtransactions")
+            for sub in subs:
+                sub_parts = [
+                    f"  - {_format_dollars(sub.amount)}"
+                ]
+                if sub.memo:
+                    sub_parts.append(f'"{sub.memo}"')
+                lines.append(" ".join(sub_parts))
+
+        response = "\n".join(lines)
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def create_scheduled_transaction(
+    ctx: ToolContext,
+    account_id: str,
+    amount: str,
+    date: str,
+    frequency: str,
+    payee_name: str | None = None,
+    category_id: str | None = None,
+    memo: str | None = None,
+    flag_color: str | None = None,
+    budget_id: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Create a scheduled (recurring) transaction in YNAB.
+
+    Args:
+        account_id: Account UUID.
+        amount: Dollar amount ("-42.50" for outflow, "100.00" for inflow).
+        date: First occurrence date (YYYY-MM-DD).
+        frequency: Recurrence frequency (e.g. "monthly", "weekly",
+            "everyOtherWeek", "yearly"). See YNAB docs for all values.
+        payee_name: Payee name.
+        category_id: Category UUID.
+        memo: Transaction memo.
+        flag_color: Flag color.
+        budget_id: Budget ID. Defaults to last-used budget.
+        dry_run: Validate and preview without creating.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(account_id, "account_id")
+    if err:
+        return err
+    parsed = _parse_amount(amount)
+    if isinstance(parsed, str):
+        return parsed
+    amount_decimal, milliunits = parsed
+    err = _validate_date(date)
+    if err:
+        return err
+    err = _validate_frequency(frequency)
+    if err:
+        return err
+    if category_id:
+        err = _validate_uuid(category_id, "category_id")
+        if err:
+            return err
+
+    txn = ScheduledTransactionWrite(
+        account_id=account_id,
+        date=date,
+        amount=milliunits,
+        frequency=frequency,
+        payee_name=payee_name,
+        category_id=category_id,
+        memo=memo,
+        flag_color=flag_color,
+    )
+
+    if dry_run:
+        lines = [
+            "[DRY RUN] Would create scheduled transaction:",
+            f"  Account: {account_id}",
+            f"  Amount: {_format_dollars(amount_decimal)}"
+            f" ({milliunits} milliunits)",
+            f"  Date: {date}",
+            f"  Frequency: {_format_frequency(frequency)}",
+        ]
+        if payee_name:
+            lines.append(f"  Payee: {payee_name}")
+        if category_id:
+            lines.append(f"  Category: {category_id}")
+        if memo:
+            lines.append(f"  Memo: {memo}")
+        if flag_color:
+            lines.append(f"  Flag: {flag_color}")
+        return "\n".join(lines)
+
+    try:
+        client = _get_client(ctx)
+        created = (
+            await client.create_scheduled_transaction(
+                bid, txn
+            )
+        )
+        response = (
+            f"Created scheduled transaction {created.id}: "
+            f"{_format_dollars(created.amount)} "
+            f"{_format_frequency(created.frequency)} "
+            f"starting {created.date_first}"
+        )
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def update_scheduled_transaction(
+    ctx: ToolContext,
+    scheduled_transaction_id: str,
+    account_id: str | None = None,
+    amount: str | None = None,
+    date: str | None = None,
+    frequency: str | None = None,
+    payee_name: str | None = None,
+    category_id: str | None = None,
+    memo: str | None = None,
+    flag_color: str | None = None,
+    budget_id: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Update fields of an existing scheduled transaction.
+
+    Only provide the fields you want to change.
+
+    Args:
+        scheduled_transaction_id: Scheduled transaction UUID.
+        account_id: New account UUID.
+        amount: New dollar amount.
+        date: New first date (YYYY-MM-DD).
+        frequency: New frequency.
+        payee_name: New payee name.
+        category_id: New category UUID.
+        memo: New memo.
+        flag_color: New flag color.
+        budget_id: Budget ID. Defaults to last-used budget.
+        dry_run: Validate and preview without updating.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(
+        scheduled_transaction_id, "scheduled_transaction_id"
+    )
+    if err:
+        return err
+
+    update_fields: dict[str, object] = {}
+    preview_lines: list[str] = []
+
+    if account_id is not None:
+        err = _validate_uuid(account_id, "account_id")
+        if err:
+            return err
+        update_fields["account_id"] = account_id
+        preview_lines.append(f"  Account: {account_id}")
+
+    if amount is not None:
+        parsed = _parse_amount(amount)
+        if isinstance(parsed, str):
+            return parsed
+        amount_decimal, milliunits = parsed
+        update_fields["amount"] = milliunits
+        preview_lines.append(
+            f"  Amount: {_format_dollars(amount_decimal)}"
+            f" ({milliunits} milliunits)"
+        )
+
+    if date is not None:
+        err = _validate_date(date)
+        if err:
+            return err
+        update_fields["date"] = date
+        preview_lines.append(f"  Date: {date}")
+
+    if frequency is not None:
+        err = _validate_frequency(frequency)
+        if err:
+            return err
+        update_fields["frequency"] = frequency
+        preview_lines.append(
+            f"  Frequency: {_format_frequency(frequency)}"
+        )
+
+    if payee_name is not None:
+        update_fields["payee_name"] = payee_name
+        preview_lines.append(f"  Payee: {payee_name}")
+
+    if category_id is not None:
+        err = _validate_uuid(category_id, "category_id")
+        if err:
+            return err
+        update_fields["category_id"] = category_id
+        preview_lines.append(f"  Category: {category_id}")
+
+    if memo is not None:
+        update_fields["memo"] = memo
+        preview_lines.append(f"  Memo: {memo}")
+
+    if flag_color is not None:
+        update_fields["flag_color"] = flag_color
+        preview_lines.append(f"  Flag: {flag_color}")
+
+    if not preview_lines:
+        return "No fields to update."
+
+    update = ScheduledTransactionUpdate(
+        **update_fields  # type: ignore[arg-type]
+    )
+
+    if dry_run:
+        header = (
+            f"[DRY RUN] Would update scheduled transaction "
+            f"{scheduled_transaction_id}:"
+        )
+        return header + "\n" + "\n".join(preview_lines)
+
+    try:
+        client = _get_client(ctx)
+        updated = (
+            await client.update_scheduled_transaction(
+                bid, scheduled_transaction_id, update
+            )
+        )
+        response = (
+            f"Updated scheduled transaction {updated.id}: "
+            f"{_format_dollars(updated.amount)} "
+            f"{_format_frequency(updated.frequency)} "
+            f"next: {updated.date_next}"
+        )
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def delete_scheduled_transaction(
+    ctx: ToolContext,
+    scheduled_transaction_id: str,
+    budget_id: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Delete a scheduled transaction from YNAB.
+
+    Args:
+        scheduled_transaction_id: Scheduled transaction UUID.
+        budget_id: Budget ID. Defaults to last-used budget.
+        dry_run: Validate and preview without deleting.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(
+        scheduled_transaction_id, "scheduled_transaction_id"
+    )
+    if err:
+        return err
+
+    if dry_run:
+        return (
+            f"[DRY RUN] Would delete scheduled transaction "
+            f"{scheduled_transaction_id}."
+        )
+
+    try:
+        client = _get_client(ctx)
+        await client.delete_scheduled_transaction(
+            bid, scheduled_transaction_id
+        )
+        response = (
+            f"Deleted scheduled transaction "
+            f"{scheduled_transaction_id}."
         )
         response += _rate_limit_warning(client)
         return response

@@ -268,3 +268,94 @@ class PayeesResponse(BaseModel):
     """Wrapper for payees endpoint response."""
 
     payees: list[Payee]
+
+
+# --- Scheduled Transaction models ---
+
+
+class ScheduledSubTransaction(BaseModel):
+    """A subtransaction within a scheduled transaction."""
+
+    id: str
+    scheduled_transaction_id: str
+    amount: Decimal
+    memo: str | None
+    payee_id: str | None
+    category_id: str | None
+    transfer_account_id: str | None
+    deleted: bool
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def convert_milliunits(cls, v: int | Decimal) -> Decimal:
+        if isinstance(v, int):
+            return milliunits_to_dollars(v)
+        return v
+
+
+class ScheduledTransaction(BaseModel):
+    """A YNAB scheduled transaction."""
+
+    id: str
+    date_first: str
+    date_next: str
+    frequency: str
+    amount: Decimal
+    memo: str | None
+    flag_color: str | None
+    account_id: str
+    account_name: str
+    payee_id: str | None
+    payee_name: str | None
+    category_id: str | None
+    category_name: str | None
+    transfer_account_id: str | None
+    subtransactions: list[ScheduledSubTransaction]
+    deleted: bool
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def convert_milliunits(cls, v: int | Decimal) -> Decimal:
+        if isinstance(v, int):
+            return milliunits_to_dollars(v)
+        return v
+
+
+class ScheduledTransactionWrite(BaseModel):
+    """Request model for creating a scheduled transaction."""
+
+    account_id: str
+    date: str
+    amount: int  # milliunits
+    frequency: str
+    payee_id: str | None = None
+    payee_name: str | None = None
+    category_id: str | None = None
+    memo: str | None = None
+    flag_color: str | None = None
+
+
+class ScheduledTransactionUpdate(BaseModel):
+    """Request model for updating a scheduled transaction."""
+
+    account_id: str | None = None
+    date: str | None = None
+    amount: int | None = None
+    frequency: str | None = None
+    payee_id: str | None = None
+    payee_name: str | None = None
+    category_id: str | None = None
+    memo: str | None = None
+    flag_color: str | None = None
+
+
+class ScheduledTransactionsResponse(BaseModel):
+    """Wrapper for scheduled transactions endpoint response."""
+
+    scheduled_transactions: list[ScheduledTransaction]
+
+
+class ScheduledTransactionResponse(BaseModel):
+    """Wrapper for single scheduled transaction endpoint response."""
+
+    scheduled_transaction: ScheduledTransaction

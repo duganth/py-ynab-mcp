@@ -11,6 +11,10 @@ from py_ynab_mcp.models import (
     MonthDetail,
     MonthSummary,
     Payee,
+    ScheduledSubTransaction,
+    ScheduledTransaction,
+    ScheduledTransactionUpdate,
+    ScheduledTransactionWrite,
     Transaction,
     TransactionUpdate,
     TransactionWrite,
@@ -367,3 +371,141 @@ class TestPayeeModel:
         )
         assert payee.name == "Costco"
         assert not payee.deleted
+
+
+class TestScheduledSubTransactionModel:
+    def test_milliunit_conversion(self) -> None:
+        sub = ScheduledSubTransaction(
+            id="sub-1",
+            scheduled_transaction_id="st-1",
+            amount=-25000,  # type: ignore[arg-type]
+            memo="Half",
+            payee_id=None,
+            category_id="cat-1",
+            transfer_account_id=None,
+            deleted=False,
+        )
+        assert sub.amount == Decimal("-25")
+
+    def test_optional_fields_none(self) -> None:
+        sub = ScheduledSubTransaction(
+            id="sub-1",
+            scheduled_transaction_id="st-1",
+            amount=Decimal("-25"),
+            memo=None,
+            payee_id=None,
+            category_id=None,
+            transfer_account_id=None,
+            deleted=False,
+        )
+        assert sub.memo is None
+        assert sub.category_id is None
+
+
+class TestScheduledTransactionModel:
+    def test_milliunit_conversion(self) -> None:
+        st = ScheduledTransaction(
+            id="st-1",
+            date_first="2026-03-01",
+            date_next="2026-04-01",
+            frequency="monthly",
+            amount=-150000,  # type: ignore[arg-type]
+            memo=None,
+            flag_color=None,
+            account_id="acct-1",
+            account_name="Checking",
+            payee_id=None,
+            payee_name="Landlord",
+            category_id=None,
+            category_name="Rent",
+            transfer_account_id=None,
+            subtransactions=[],
+            deleted=False,
+        )
+        assert st.amount == Decimal("-150")
+
+    def test_with_subtransactions(self) -> None:
+        sub = ScheduledSubTransaction(
+            id="sub-1",
+            scheduled_transaction_id="st-1",
+            amount=Decimal("-50"),
+            memo="Part 1",
+            payee_id=None,
+            category_id=None,
+            transfer_account_id=None,
+            deleted=False,
+        )
+        st = ScheduledTransaction(
+            id="st-1",
+            date_first="2026-03-01",
+            date_next="2026-04-01",
+            frequency="monthly",
+            amount=Decimal("-100"),
+            memo=None,
+            flag_color="blue",
+            account_id="acct-1",
+            account_name="Checking",
+            payee_id=None,
+            payee_name=None,
+            category_id=None,
+            category_name=None,
+            transfer_account_id=None,
+            subtransactions=[sub],
+            deleted=False,
+        )
+        assert len(st.subtransactions) == 1
+        assert st.flag_color == "blue"
+
+
+class TestScheduledTransactionWriteModel:
+    def test_required_fields(self) -> None:
+        w = ScheduledTransactionWrite(
+            account_id="acct-1",
+            date="2026-03-01",
+            amount=-150000,
+            frequency="monthly",
+        )
+        assert w.frequency == "monthly"
+        assert w.payee_name is None
+
+    def test_exclude_none_dump(self) -> None:
+        w = ScheduledTransactionWrite(
+            account_id="acct-1",
+            date="2026-03-01",
+            amount=-150000,
+            frequency="monthly",
+        )
+        dumped = w.model_dump(exclude_none=True)
+        assert "payee_name" not in dumped
+        assert "memo" not in dumped
+        assert dumped["frequency"] == "monthly"
+
+    def test_optional_fields(self) -> None:
+        w = ScheduledTransactionWrite(
+            account_id="acct-1",
+            date="2026-03-01",
+            amount=-150000,
+            frequency="monthly",
+            payee_name="Landlord",
+            memo="Rent",
+        )
+        assert w.payee_name == "Landlord"
+        assert w.memo == "Rent"
+
+
+class TestScheduledTransactionUpdateModel:
+    def test_all_optional(self) -> None:
+        u = ScheduledTransactionUpdate()
+        dumped = u.model_dump(exclude_none=True)
+        assert dumped == {}
+
+    def test_partial_fields(self) -> None:
+        u = ScheduledTransactionUpdate(
+            amount=-200000,
+            frequency="weekly",
+        )
+        dumped = u.model_dump(exclude_none=True)
+        assert dumped == {
+            "amount": -200000,
+            "frequency": "weekly",
+        }

@@ -25,6 +25,11 @@ from py_ynab_mcp.models import (
     MonthSummary,
     Payee,
     PayeesResponse,
+    ScheduledTransaction,
+    ScheduledTransactionResponse,
+    ScheduledTransactionsResponse,
+    ScheduledTransactionUpdate,
+    ScheduledTransactionWrite,
     Transaction,
     TransactionResponse,
     TransactionsResponse,
@@ -472,6 +477,147 @@ class YNABClient:
                 0, "Unexpected response format from YNAB API"
             ) from None
         return parsed.category
+
+    def _validate_scheduled_transaction_id(
+        self, scheduled_transaction_id: str
+    ) -> None:
+        if not _UUID_RE.match(scheduled_transaction_id):
+            raise YNABError(
+                400,
+                "Invalid scheduled_transaction_id format",
+            )
+
+    async def get_scheduled_transactions(
+        self, budget_id: str = "last-used"
+    ) -> list[ScheduledTransaction]:
+        """List scheduled transactions for a budget."""
+        self._validate_budget_id(budget_id)
+        data = await self._request(
+            "GET",
+            f"/budgets/{budget_id}/scheduled_transactions",
+        )
+        try:
+            parsed = (
+                ScheduledTransactionsResponse.model_validate(
+                    data
+                )
+            )
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return [
+            st
+            for st in parsed.scheduled_transactions
+            if not st.deleted
+        ]
+
+    async def get_scheduled_transaction(
+        self,
+        budget_id: str,
+        scheduled_transaction_id: str,
+    ) -> ScheduledTransaction:
+        """Get a single scheduled transaction."""
+        self._validate_budget_id(budget_id)
+        self._validate_scheduled_transaction_id(
+            scheduled_transaction_id
+        )
+        data = await self._request(
+            "GET",
+            f"/budgets/{budget_id}"
+            f"/scheduled_transactions"
+            f"/{scheduled_transaction_id}",
+        )
+        try:
+            parsed = (
+                ScheduledTransactionResponse.model_validate(
+                    data
+                )
+            )
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.scheduled_transaction
+
+    async def create_scheduled_transaction(
+        self,
+        budget_id: str,
+        transaction: ScheduledTransactionWrite,
+    ) -> ScheduledTransaction:
+        """Create a scheduled transaction."""
+        self._validate_budget_id(budget_id)
+        data = await self._request(
+            "POST",
+            f"/budgets/{budget_id}/scheduled_transactions",
+            json={
+                "scheduled_transaction": (
+                    transaction.model_dump(exclude_none=True)
+                )
+            },
+        )
+        try:
+            parsed = (
+                ScheduledTransactionResponse.model_validate(
+                    data
+                )
+            )
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.scheduled_transaction
+
+    async def update_scheduled_transaction(
+        self,
+        budget_id: str,
+        scheduled_transaction_id: str,
+        update: ScheduledTransactionUpdate,
+    ) -> ScheduledTransaction:
+        """Update a scheduled transaction."""
+        self._validate_budget_id(budget_id)
+        self._validate_scheduled_transaction_id(
+            scheduled_transaction_id
+        )
+        data = await self._request(
+            "PUT",
+            f"/budgets/{budget_id}"
+            f"/scheduled_transactions"
+            f"/{scheduled_transaction_id}",
+            json={
+                "scheduled_transaction": (
+                    update.model_dump(exclude_none=True)
+                )
+            },
+        )
+        try:
+            parsed = (
+                ScheduledTransactionResponse.model_validate(
+                    data
+                )
+            )
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.scheduled_transaction
+
+    async def delete_scheduled_transaction(
+        self,
+        budget_id: str,
+        scheduled_transaction_id: str,
+    ) -> None:
+        """Delete a scheduled transaction."""
+        self._validate_budget_id(budget_id)
+        self._validate_scheduled_transaction_id(
+            scheduled_transaction_id
+        )
+        await self._request(
+            "DELETE",
+            f"/budgets/{budget_id}"
+            f"/scheduled_transactions"
+            f"/{scheduled_transaction_id}",
+        )
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

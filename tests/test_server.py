@@ -15,21 +15,28 @@ from py_ynab_mcp.models import (
     MonthDetail,
     MonthSummary,
     Payee,
+    ScheduledSubTransaction,
+    ScheduledTransaction,
     Transaction,
 )
 from py_ynab_mcp.server import (
+    create_scheduled_transaction,
     create_transaction,
     create_transactions,
+    delete_scheduled_transaction,
     delete_transaction,
     get_month,
+    get_scheduled_transaction,
     list_accounts,
     list_budgets,
     list_categories,
     list_months,
     list_payees,
+    list_scheduled_transactions,
     list_transactions,
     update_category,
     update_category_budget,
+    update_scheduled_transaction,
     update_transaction,
 )
 
@@ -1804,3 +1811,488 @@ class TestUpdateCategory:
         )
 
         assert "unexpected error" in result
+
+
+# --- Scheduled transaction test helpers ---
+
+
+def _make_scheduled_txn(
+    st_id: str = "st-1",
+    amount: Decimal = Decimal("-150"),
+    frequency: str = "monthly",
+    payee_name: str | None = "Landlord",
+    category_name: str | None = "Rent",
+    memo: str | None = None,
+    date_next: str = "2026-04-01",
+    subtransactions: list[ScheduledSubTransaction] | None = None,
+) -> ScheduledTransaction:
+    return ScheduledTransaction(
+        id=st_id,
+        date_first="2026-03-01",
+        date_next=date_next,
+        frequency=frequency,
+        amount=amount,
+        memo=memo,
+        flag_color=None,
+        account_id=_VALID_UUID,
+        account_name="Checking",
+        payee_id=None,
+        payee_name=payee_name,
+        category_id=None,
+        category_name=category_name,
+        transfer_account_id=None,
+        subtransactions=subtransactions or [],
+        deleted=False,
+    )
+
+
+class TestListScheduledTransactions:
+    @pytest.mark.anyio
+    async def test_returns_formatted_list(self) -> None:
+        scheduled = [
+            _make_scheduled_txn(
+                "st-1", date_next="2026-04-01"
+            ),
+            _make_scheduled_txn(
+                "st-2",
+                amount=Decimal("-50"),
+                frequency="weekly",
+                payee_name="Netflix",
+                category_name="Entertainment",
+                date_next="2026-03-05",
+            ),
+        ]
+        mock_client = AsyncMock()
+        mock_client.get_scheduled_transactions.return_value = (
+            scheduled
+        )
+
+        result = await list_scheduled_transactions(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "Landlord" in result
+        assert "Netflix" in result
+        assert "Monthly" in result
+        assert "Weekly" in result
+        assert "-$150.00" in result
+        assert "st-1" in result
+
+    @pytest.mark.anyio
+    async def test_sorted_by_date_next(self) -> None:
+        scheduled = [
+            _make_scheduled_txn(
+                "st-later", date_next="2026-06-01"
+            ),
+            _make_scheduled_txn(
+                "st-sooner", date_next="2026-03-01"
+            ),
+        ]
+        mock_client = AsyncMock()
+        mock_client.get_scheduled_transactions.return_value = (
+            scheduled
+        )
+
+        result = await list_scheduled_transactions(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        sooner_pos = result.index("st-sooner")
+        later_pos = result.index("st-later")
+        assert sooner_pos < later_pos
+
+    @pytest.mark.anyio
+    async def test_empty(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_scheduled_transactions.return_value = []
+
+        result = await list_scheduled_transactions(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "No scheduled transactions" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await list_scheduled_transactions(
+            ctx=_mock_ctx(), budget_id="bad"
+        )
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_scheduled_transactions.side_effect = (
+            YNABError(500, "Server error")
+        )
+
+        result = await list_scheduled_transactions(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "Server error" in result
+
+    @pytest.mark.anyio
+    async def test_with_memo(self) -> None:
+        scheduled = [
+            _make_scheduled_txn(memo="Auto-pay")
+        ]
+        mock_client = AsyncMock()
+        mock_client.get_scheduled_transactions.return_value = (
+            scheduled
+        )
+
+        result = await list_scheduled_transactions(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "Auto-pay" in result
+
+
+class TestGetScheduledTransaction:
+    @pytest.mark.anyio
+    async def test_returns_detail(self) -> None:
+        st = _make_scheduled_txn(memo="Rent payment")
+        mock_client = AsyncMock()
+        mock_client.get_scheduled_transaction.return_value = st
+        mock_client.rate_limit_remaining = None
+
+        result = await get_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            scheduled_transaction_id=_VALID_UUID,
+        )
+
+        assert "-$150.00" in result
+        assert "Monthly" in result
+        assert "Landlord" in result
+        assert "Rent" in result
+        assert "Rent payment" in result
+
+    @pytest.mark.anyio
+    async def test_with_subtransactions(self) -> None:
+        sub = ScheduledSubTransaction(
+            id="sub-1",
+            scheduled_transaction_id="st-1",
+            amount=Decimal("-75"),
+            memo="Half",
+            payee_id=None,
+            category_id=None,
+            transfer_account_id=None,
+            deleted=False,
+        )
+        st = _make_scheduled_txn(subtransactions=[sub])
+        mock_client = AsyncMock()
+        mock_client.get_scheduled_transaction.return_value = st
+        mock_client.rate_limit_remaining = None
+
+        result = await get_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            scheduled_transaction_id=_VALID_UUID,
+        )
+
+        assert "Subtransactions" in result
+        assert "-$75.00" in result
+        assert "Half" in result
+
+    @pytest.mark.anyio
+    async def test_filters_deleted_subtransactions(
+        self,
+    ) -> None:
+        sub_active = ScheduledSubTransaction(
+            id="sub-1",
+            scheduled_transaction_id="st-1",
+            amount=Decimal("-75"),
+            memo="Active",
+            payee_id=None,
+            category_id=None,
+            transfer_account_id=None,
+            deleted=False,
+        )
+        sub_deleted = ScheduledSubTransaction(
+            id="sub-2",
+            scheduled_transaction_id="st-1",
+            amount=Decimal("-25"),
+            memo="Deleted",
+            payee_id=None,
+            category_id=None,
+            transfer_account_id=None,
+            deleted=True,
+        )
+        st = _make_scheduled_txn(
+            subtransactions=[sub_active, sub_deleted]
+        )
+        mock_client = AsyncMock()
+        mock_client.get_scheduled_transaction.return_value = st
+        mock_client.rate_limit_remaining = None
+
+        result = await get_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            scheduled_transaction_id=_VALID_UUID,
+        )
+
+        assert "Active" in result
+        assert "Deleted" not in result
+
+    @pytest.mark.anyio
+    async def test_invalid_id(self) -> None:
+        result = await get_scheduled_transaction(
+            ctx=_mock_ctx(),
+            scheduled_transaction_id="bad",
+        )
+        assert "Invalid scheduled_transaction_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_scheduled_transaction.side_effect = (
+            YNABError(404, "Not found")
+        )
+
+        result = await get_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            scheduled_transaction_id=_VALID_UUID,
+        )
+
+        assert "Not found" in result
+
+
+class TestCreateScheduledTransaction:
+    @pytest.mark.anyio
+    async def test_creates(self) -> None:
+        created = _make_scheduled_txn("st-new")
+        mock_client = AsyncMock()
+        mock_client.create_scheduled_transaction.return_value = (
+            created
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await create_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-150.00",
+            date="2026-03-01",
+            frequency="monthly",
+            payee_name="Landlord",
+        )
+
+        assert "st-new" in result
+        assert "-$150.00" in result
+        assert "Monthly" in result
+
+    @pytest.mark.anyio
+    async def test_dry_run(self) -> None:
+        result = await create_scheduled_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="-150.00",
+            date="2026-03-01",
+            frequency="monthly",
+            payee_name="Landlord",
+            dry_run=True,
+        )
+
+        assert "DRY RUN" in result
+        assert "-$150.00" in result
+        assert "Monthly" in result
+        assert "Landlord" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_frequency(self) -> None:
+        result = await create_scheduled_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="-150.00",
+            date="2026-03-01",
+            frequency="biweekly",
+        )
+
+        assert "Invalid frequency" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_amount(self) -> None:
+        result = await create_scheduled_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="not-a-number",
+            date="2026-03-01",
+            frequency="monthly",
+        )
+
+        assert "Invalid amount" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_date(self) -> None:
+        result = await create_scheduled_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="-150.00",
+            date="march",
+            frequency="monthly",
+        )
+
+        assert "Invalid date" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_account_id(self) -> None:
+        result = await create_scheduled_transaction(
+            ctx=_mock_ctx(),
+            account_id="bad",
+            amount="-150.00",
+            date="2026-03-01",
+            frequency="monthly",
+        )
+
+        assert "Invalid account_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.create_scheduled_transaction.side_effect = (
+            YNABError(400, "Bad request")
+        )
+
+        result = await create_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-150.00",
+            date="2026-03-01",
+            frequency="monthly",
+        )
+
+        assert "Bad request" in result
+
+
+class TestUpdateScheduledTransaction:
+    @pytest.mark.anyio
+    async def test_updates(self) -> None:
+        updated = _make_scheduled_txn()
+        mock_client = AsyncMock()
+        mock_client.update_scheduled_transaction.return_value = (
+            updated
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await update_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            scheduled_transaction_id=_VALID_UUID,
+            amount="-200.00",
+        )
+
+        assert "Updated" in result
+
+    @pytest.mark.anyio
+    async def test_dry_run(self) -> None:
+        result = await update_scheduled_transaction(
+            ctx=_mock_ctx(),
+            scheduled_transaction_id=_VALID_UUID,
+            amount="-200.00",
+            frequency="weekly",
+            dry_run=True,
+        )
+
+        assert "DRY RUN" in result
+        assert "-$200.00" in result
+        assert "Weekly" in result
+
+    @pytest.mark.anyio
+    async def test_no_fields(self) -> None:
+        result = await update_scheduled_transaction(
+            ctx=_mock_ctx(),
+            scheduled_transaction_id=_VALID_UUID,
+        )
+
+        assert "No fields to update" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_id(self) -> None:
+        result = await update_scheduled_transaction(
+            ctx=_mock_ctx(),
+            scheduled_transaction_id="bad",
+            amount="-100",
+        )
+
+        assert "Invalid scheduled_transaction_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_frequency(self) -> None:
+        result = await update_scheduled_transaction(
+            ctx=_mock_ctx(),
+            scheduled_transaction_id=_VALID_UUID,
+            frequency="biweekly",
+        )
+
+        assert "Invalid frequency" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_scheduled_transaction.side_effect = (
+            YNABError(404, "Not found")
+        )
+
+        result = await update_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            scheduled_transaction_id=_VALID_UUID,
+            amount="-200.00",
+        )
+
+        assert "Not found" in result
+
+
+class TestDeleteScheduledTransaction:
+    @pytest.mark.anyio
+    async def test_deletes(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+
+        result = await delete_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            scheduled_transaction_id=_VALID_UUID,
+        )
+
+        assert "Deleted" in result
+        assert _VALID_UUID in result
+
+    @pytest.mark.anyio
+    async def test_dry_run(self) -> None:
+        result = await delete_scheduled_transaction(
+            ctx=_mock_ctx(),
+            scheduled_transaction_id=_VALID_UUID,
+            dry_run=True,
+        )
+
+        assert "DRY RUN" in result
+        assert _VALID_UUID in result
+
+    @pytest.mark.anyio
+    async def test_invalid_id(self) -> None:
+        result = await delete_scheduled_transaction(
+            ctx=_mock_ctx(),
+            scheduled_transaction_id="bad",
+        )
+
+        assert "Invalid scheduled_transaction_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.delete_scheduled_transaction.side_effect = (
+            YNABError(404, "Not found")
+        )
+
+        result = await delete_scheduled_transaction(
+            ctx=_mock_ctx(mock_client),
+            scheduled_transaction_id=_VALID_UUID,
+        )
+
+        assert "Not found" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await delete_scheduled_transaction(
+            ctx=_mock_ctx(),
+            scheduled_transaction_id=_VALID_UUID,
+            budget_id="bad",
+        )
+
+        assert "Invalid budget_id" in result
