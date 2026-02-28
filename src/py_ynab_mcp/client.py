@@ -14,7 +14,11 @@ from py_ynab_mcp.models import (
     BulkCreateResponse,
     BulkResult,
     CategoriesResponse,
+    Category,
+    CategoryBudgetWrite,
     CategoryGroup,
+    CategoryResponse,
+    CategoryUpdate,
     Payee,
     PayeesResponse,
     Transaction,
@@ -380,6 +384,58 @@ class YNABClient:
             "DELETE",
             f"/budgets/{budget_id}/transactions/{transaction_id}",
         )
+
+    def _validate_category_id(self, category_id: str) -> None:
+        if not _UUID_RE.match(category_id):
+            raise YNABError(400, "Invalid category_id format")
+
+    async def update_category_budget(
+        self,
+        budget_id: str,
+        month: str,
+        category_id: str,
+        budget_write: CategoryBudgetWrite,
+    ) -> Category:
+        """Update the budgeted amount for a category in a month."""
+        self._validate_budget_id(budget_id)
+        self._validate_category_id(category_id)
+        data = await self._request(
+            "PATCH",
+            f"/budgets/{budget_id}/months/{month}"
+            f"/categories/{category_id}",
+            json={"category": budget_write.model_dump()},
+        )
+        try:
+            parsed = CategoryResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.category
+
+    async def update_category(
+        self,
+        budget_id: str,
+        category_id: str,
+        update: CategoryUpdate,
+    ) -> Category:
+        """Update category metadata."""
+        self._validate_budget_id(budget_id)
+        self._validate_category_id(category_id)
+        data = await self._request(
+            "PATCH",
+            f"/budgets/{budget_id}/categories/{category_id}",
+            json={"category": update.model_dump(
+                exclude_none=True
+            )},
+        )
+        try:
+            parsed = CategoryResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.category
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

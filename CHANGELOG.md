@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- `update_category_budget` MCP tool — set budgeted amount for a category in a specific month
+- `update_category` MCP tool — update category metadata (name, note, hidden) with dry-run support
 - `list_budgets` MCP tool — lists all budgets with names, IDs, date ranges, and last modified dates
 - Shared YNAB client via FastMCP lifespan for connection pooling across tool calls
 - `list_transactions` MCP tool — query transactions with required `since_date` and optional account/category/payee/type filters, routes to correct YNAB endpoint

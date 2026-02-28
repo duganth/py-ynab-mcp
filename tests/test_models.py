@@ -6,6 +6,8 @@ from py_ynab_mcp.models import (
     Account,
     BudgetSummary,
     Category,
+    CategoryBudgetWrite,
+    CategoryUpdate,
     Payee,
     Transaction,
     TransactionUpdate,
@@ -211,6 +213,62 @@ class TestCategoryModel:
         assert cat.budgeted == Decimal("500")
         assert cat.activity == Decimal("-250")
         assert cat.balance == Decimal("250")
+
+    def test_optional_fields(self) -> None:
+        cat = Category(
+            id="cat-1",
+            name="Groceries",
+            category_group_id="group-1",
+            budgeted=Decimal("500"),
+            activity=Decimal("-250"),
+            balance=Decimal("250"),
+            note="Weekly groceries",
+            hidden=True,
+            deleted=False,
+        )
+        assert cat.category_group_id == "group-1"
+        assert cat.note == "Weekly groceries"
+        assert cat.hidden is True
+
+    def test_optional_fields_default(self) -> None:
+        cat = Category(
+            id="cat-1",
+            name="Groceries",
+            budgeted=Decimal("0"),
+            activity=Decimal("0"),
+            balance=Decimal("0"),
+            deleted=False,
+        )
+        assert cat.category_group_id is None
+        assert cat.note is None
+        assert cat.hidden is False
+
+
+class TestCategoryBudgetWriteModel:
+    def test_budgeted_field(self) -> None:
+        w = CategoryBudgetWrite(budgeted=500000)
+        assert w.budgeted == 500000
+        assert w.model_dump() == {"budgeted": 500000}
+
+
+class TestCategoryUpdateModel:
+    def test_all_fields(self) -> None:
+        u = CategoryUpdate(
+            name="Restaurants", note="Eating out", hidden=False
+        )
+        dumped = u.model_dump(exclude_none=True)
+        assert dumped == {
+            "name": "Restaurants",
+            "note": "Eating out",
+            "hidden": False,
+        }
+
+    def test_partial_fields(self) -> None:
+        u = CategoryUpdate(name="Restaurants")
+        dumped = u.model_dump(exclude_none=True)
+        assert dumped == {"name": "Restaurants"}
+        assert "note" not in dumped
+        assert "hidden" not in dumped
 
 
 class TestPayeeModel:

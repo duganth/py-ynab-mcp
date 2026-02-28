@@ -24,6 +24,8 @@ from py_ynab_mcp.server import (
     list_categories,
     list_payees,
     list_transactions,
+    update_category,
+    update_category_budget,
     update_transaction,
 )
 
@@ -1196,3 +1198,291 @@ class TestDeleteTransaction:
 
         assert "Rate limit" in result
         assert "5/200" in result
+
+
+def _make_category(
+    name: str = "Groceries",
+    budgeted: Decimal = Decimal("500.00"),
+    activity: Decimal = Decimal("-200.00"),
+    balance: Decimal = Decimal("300.00"),
+    note: str | None = None,
+    hidden: bool = False,
+) -> Category:
+    return Category(
+        id=_VALID_UUID,
+        name=name,
+        category_group_id=_VALID_UUID_2,
+        budgeted=budgeted,
+        activity=activity,
+        balance=balance,
+        note=note,
+        hidden=hidden,
+        deleted=False,
+    )
+
+
+class TestUpdateCategoryBudget:
+    @pytest.mark.anyio
+    async def test_updates_and_returns_confirmation(
+        self,
+    ) -> None:
+        cat = _make_category(budgeted=Decimal("500.00"))
+        mock_client = AsyncMock()
+        mock_client.update_category_budget.return_value = cat
+        mock_client.rate_limit_remaining = None
+
+        result = await update_category_budget(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            month="2026-03-01",
+            amount="500.00",
+        )
+
+        assert "Updated budget" in result
+        assert "Groceries" in result
+        assert "$500.00" in result
+        assert "Mar 2026" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_category_id(self) -> None:
+        result = await update_category_budget(
+            ctx=_mock_ctx(),
+            category_id="bad-id",
+            month="2026-03-01",
+            amount="500.00",
+        )
+        assert "Invalid category_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_month(self) -> None:
+        result = await update_category_budget(
+            ctx=_mock_ctx(),
+            category_id=_VALID_UUID,
+            month="bad-date",
+            amount="500.00",
+        )
+        assert "Invalid date" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_amount(self) -> None:
+        result = await update_category_budget(
+            ctx=_mock_ctx(),
+            category_id=_VALID_UUID,
+            month="2026-03-01",
+            amount="not-a-number",
+        )
+        assert "Invalid amount" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await update_category_budget(
+            ctx=_mock_ctx(),
+            category_id=_VALID_UUID,
+            month="2026-03-01",
+            amount="500.00",
+            budget_id="../../evil",
+        )
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_dry_run_preview(self) -> None:
+        result = await update_category_budget(
+            ctx=_mock_ctx(),
+            category_id=_VALID_UUID,
+            month="2026-03-01",
+            amount="500.00",
+            dry_run=True,
+        )
+        assert "[DRY RUN]" in result
+        assert "$500.00" in result
+        assert "500000 milliunits" in result
+
+    @pytest.mark.anyio
+    async def test_rate_limit_warning(self) -> None:
+        cat = _make_category()
+        mock_client = AsyncMock()
+        mock_client.update_category_budget.return_value = cat
+        mock_client.rate_limit_remaining = 10
+
+        result = await update_category_budget(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            month="2026-03-01",
+            amount="500.00",
+        )
+
+        assert "Rate limit" in result
+        assert "10/200" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_category_budget.side_effect = (
+            YNABError(404, "Category not found")
+        )
+
+        result = await update_category_budget(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            month="2026-03-01",
+            amount="500.00",
+        )
+
+        assert "Category not found" in result
+
+    @pytest.mark.anyio
+    async def test_unexpected_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_category_budget.side_effect = (
+            RuntimeError("boom")
+        )
+
+        result = await update_category_budget(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            month="2026-03-01",
+            amount="500.00",
+        )
+
+        assert "unexpected error" in result
+
+
+class TestUpdateCategory:
+    @pytest.mark.anyio
+    async def test_updates_name_and_returns_confirmation(
+        self,
+    ) -> None:
+        cat = _make_category(name="Restaurants")
+        mock_client = AsyncMock()
+        mock_client.update_category.return_value = cat
+        mock_client.rate_limit_remaining = None
+
+        result = await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            name="Restaurants",
+        )
+
+        assert "Updated category" in result
+        assert "Restaurants" in result
+        assert 'name' in result
+
+    @pytest.mark.anyio
+    async def test_updates_multiple_fields(self) -> None:
+        cat = _make_category(
+            name="Restaurants", note="Eating out"
+        )
+        mock_client = AsyncMock()
+        mock_client.update_category.return_value = cat
+        mock_client.rate_limit_remaining = None
+
+        result = await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            name="Restaurants",
+            note="Eating out",
+        )
+
+        assert "Restaurants" in result
+        assert "Eating out" in result
+
+    @pytest.mark.anyio
+    async def test_updates_hidden(self) -> None:
+        cat = _make_category(hidden=True)
+        mock_client = AsyncMock()
+        mock_client.update_category.return_value = cat
+        mock_client.rate_limit_remaining = None
+
+        result = await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            hidden=True,
+        )
+
+        assert "hidden" in result
+
+    @pytest.mark.anyio
+    async def test_no_fields_returns_error(self) -> None:
+        result = await update_category(
+            ctx=_mock_ctx(),
+            category_id=_VALID_UUID,
+        )
+        assert "No fields to update" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_category_id(self) -> None:
+        result = await update_category(
+            ctx=_mock_ctx(),
+            category_id="bad-id",
+            name="Test",
+        )
+        assert "Invalid category_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await update_category(
+            ctx=_mock_ctx(),
+            category_id=_VALID_UUID,
+            name="Test",
+            budget_id="../../evil",
+        )
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_dry_run_preview(self) -> None:
+        result = await update_category(
+            ctx=_mock_ctx(),
+            category_id=_VALID_UUID,
+            name="Restaurants",
+            note="Eating out",
+            dry_run=True,
+        )
+        assert "[DRY RUN]" in result
+        assert "Restaurants" in result
+        assert "Eating out" in result
+
+    @pytest.mark.anyio
+    async def test_rate_limit_warning(self) -> None:
+        cat = _make_category()
+        mock_client = AsyncMock()
+        mock_client.update_category.return_value = cat
+        mock_client.rate_limit_remaining = 10
+
+        result = await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            name="Test",
+        )
+
+        assert "Rate limit" in result
+        assert "10/200" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_category.side_effect = (
+            YNABError(404, "Category not found")
+        )
+
+        result = await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            name="Test",
+        )
+
+        assert "Category not found" in result
+
+    @pytest.mark.anyio
+    async def test_unexpected_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_category.side_effect = (
+            RuntimeError("boom")
+        )
+
+        result = await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            name="Test",
+        )
+
+        assert "unexpected error" in result

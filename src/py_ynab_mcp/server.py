@@ -11,6 +11,8 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from py_ynab_mcp.client import YNABClient, YNABError
 from py_ynab_mcp.models import (
+    CategoryBudgetWrite,
+    CategoryUpdate,
     Transaction,
     TransactionUpdate,
     TransactionWrite,
@@ -778,6 +780,136 @@ async def delete_transaction(
         client = _get_client(ctx)
         await client.delete_transaction(bid, transaction_id)
         response = f"Deleted transaction {transaction_id}."
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def update_category_budget(
+    ctx: ToolContext,
+    category_id: str,
+    month: str,
+    amount: str,
+    budget_id: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Set the budgeted (assigned) amount for a category in a specific month.
+
+    Args:
+        category_id: Category UUID.
+        month: Month to update (YYYY-MM-DD, first of month, e.g. "2026-03-01").
+        amount: Dollar amount to assign (e.g. "500.00").
+        budget_id: Budget ID. Defaults to last-used budget.
+        dry_run: Validate and preview without updating.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(category_id, "category_id")
+    if err:
+        return err
+    err = _validate_date(month)
+    if err:
+        return err
+    parsed = _parse_amount(amount)
+    if isinstance(parsed, str):
+        return parsed
+    amount_decimal, milliunits = parsed
+
+    if dry_run:
+        return (
+            f"[DRY RUN] Would set budget for category "
+            f"{category_id} in {month}: "
+            f"{_format_dollars(amount_decimal)}"
+            f" ({milliunits} milliunits)"
+        )
+
+    try:
+        client = _get_client(ctx)
+        budget_write = CategoryBudgetWrite(budgeted=milliunits)
+        updated = await client.update_category_budget(
+            bid, month, category_id, budget_write
+        )
+        response = (
+            f"Updated budget for {updated.name} "
+            f"({_format_month(month)}): "
+            f"{_format_dollars(updated.budgeted)}"
+        )
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def update_category(
+    ctx: ToolContext,
+    category_id: str,
+    name: str | None = None,
+    note: str | None = None,
+    hidden: bool | None = None,
+    budget_id: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Update category metadata in YNAB.
+
+    Only provide the fields you want to change.
+
+    Args:
+        category_id: Category UUID.
+        name: New category name.
+        note: New category note.
+        hidden: Whether to hide the category.
+        budget_id: Budget ID. Defaults to last-used budget.
+        dry_run: Validate and preview without updating.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(category_id, "category_id")
+    if err:
+        return err
+
+    changes: list[str] = []
+    if name is not None:
+        changes.append(f'name \u2192 "{name}"')
+    if note is not None:
+        changes.append(f'note \u2192 "{note}"')
+    if hidden is not None:
+        changes.append(
+            f'hidden \u2192 {"yes" if hidden else "no"}'
+        )
+
+    if not changes:
+        return "No fields to update."
+
+    update = CategoryUpdate(
+        name=name, note=note, hidden=hidden
+    )
+
+    if dry_run:
+        return (
+            f"[DRY RUN] Would update category "
+            f"{category_id}: {', '.join(changes)}"
+        )
+
+    try:
+        client = _get_client(ctx)
+        updated = await client.update_category(
+            bid, category_id, update
+        )
+        response = (
+            f"Updated category {updated.name}: "
+            f"{', '.join(changes)}"
+        )
         response += _rate_limit_warning(client)
         return response
     except YNABError as e:

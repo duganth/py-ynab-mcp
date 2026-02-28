@@ -158,9 +158,12 @@ class Category(BaseModel):
 
     id: str
     name: str
+    category_group_id: str | None = None
     budgeted: Decimal
     activity: Decimal
     balance: Decimal
+    note: str | None = None
+    hidden: bool = False
     deleted: bool
 
     @field_validator("budgeted", "activity", "balance", mode="before")
@@ -169,6 +172,26 @@ class Category(BaseModel):
         if isinstance(v, int):
             return milliunits_to_dollars(v)
         return v
+
+
+class CategoryResponse(BaseModel):
+    """Wrapper for single category endpoint response."""
+
+    category: Category
+
+
+class CategoryBudgetWrite(BaseModel):
+    """Request model for updating a category's monthly budget."""
+
+    budgeted: int  # milliunits
+
+
+class CategoryUpdate(BaseModel):
+    """Request model for updating category metadata."""
+
+    name: str | None = None
+    note: str | None = None
+    hidden: bool | None = None
 
 
 class CategoryGroup(BaseModel):
