@@ -4,11 +4,12 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for [YNAB (Yo
 
 ## Features
 
-- Query budgets, accounts, categories, transactions, and more
-- Create, update, and delete transactions
-- Update category budgets and move money
-- Manage scheduled transactions
-- Delta sync support to minimize API calls
+- Query budgets, accounts, categories, transactions, payees, and months
+- Get single-resource details (account, category, payee, transaction)
+- Create, update, and delete transactions (single and bulk)
+- Update category budgets and metadata
+- Manage scheduled transactions (full CRUD)
+- Budget settings and user info
 
 ## Install
 
@@ -57,20 +58,20 @@ We wanted a Python MCP server for YNAB that is properly licensed, well-tested, a
 ## YNAB API Coverage
 
 ### Read
-- Budgets, accounts, categories, payees, months
-- Transactions (with filtering by account, category, payee, date)
-- Scheduled transactions
-- Delta sync on supported endpoints
+- User info, budget settings
+- Budgets, accounts, categories, payees, months (list and single)
+- Transactions with filtering by account, category, or payee
+- Scheduled transactions (list and single)
 
 ### Write
 - Create, update, delete transactions (single and bulk)
-- Update category budgets
-- Create accounts
+- Update category budgets and metadata
 - Create, update, delete scheduled transactions
-- Update payees
 
-### Not supported by YNAB API
-- Creating budgets, categories, or payees (must be done in the YNAB app)
+### Not available in YNAB API
+- Create/delete budgets, categories, or accounts
+- Create/update/delete payees (auto-created via transactions)
+- Transaction import
 
 ## Development
 

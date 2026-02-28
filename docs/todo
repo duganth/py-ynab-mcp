@@ -1,0 +1,7 @@
+# TODO
+
+## Low
+
+- [ ] Decide whether UUID validation should accept uppercase UUID strings and update regex validation consistently across server/client if yes.
+  - Files: `src/py_ynab_mcp/server.py`, `src/py_ynab_mcp/client.py`.
+  - Current decision: lowercase-only, matches what YNAB returns.

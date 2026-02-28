@@ -1172,6 +1172,16 @@ class TestCreateTransaction:
         assert "Invalid date" in result
 
     @pytest.mark.anyio
+    async def test_impossible_date_returns_error(self) -> None:
+        result = await create_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="-42.50",
+            date="2026-13-40",
+        )
+        assert "Invalid date" in result
+
+    @pytest.mark.anyio
     async def test_invalid_account_id_returns_error(
         self,
     ) -> None:
@@ -1368,6 +1378,33 @@ class TestCreateTransactions:
         assert "[DRY RUN]" in result
         assert "-$42.50" in result
         assert "Costco" in result
+
+    @pytest.mark.anyio
+    async def test_non_string_account_id(self) -> None:
+        result = await create_transactions(
+            ctx=_mock_ctx(),
+            transactions_json=(
+                '[{"account_id": 123,'
+                ' "amount": "-42.50",'
+                ' "date": "2026-02-25"}]'
+            ),
+        )
+        assert "Invalid" in result
+        assert "account_id" in result
+
+    @pytest.mark.anyio
+    async def test_non_string_category_id(self) -> None:
+        result = await create_transactions(
+            ctx=_mock_ctx(),
+            transactions_json=(
+                f'[{{"account_id": "{_VALID_UUID}",'
+                f' "amount": "-42.50",'
+                f' "date": "2026-02-25",'
+                f' "category_id": 456}}]'
+            ),
+        )
+        assert "Invalid" in result
+        assert "category_id" in result
 
     @pytest.mark.anyio
     async def test_duplicates_reported(self) -> None:

@@ -81,15 +81,22 @@ def _parse_amount(amount: str) -> tuple[Decimal, int] | str:
 
 
 def _validate_date(date: str) -> str | None:
-    """Validate YYYY-MM-DD date format. Returns error or None."""
+    """Validate YYYY-MM-DD date format and value. Returns error or None."""
     if not _DATE_RE.match(date):
         return f"Invalid date: {date!r}. Use YYYY-MM-DD format."
+    try:
+        year, month, day = date.split("-")
+        _y, m, d = int(year), int(month), int(day)
+    except ValueError:
+        return f"Invalid date: {date!r}. Use YYYY-MM-DD format."
+    if not (1 <= m <= 12 and 1 <= d <= 31):
+        return f"Invalid date: {date!r}. Month/day out of range."
     return None
 
 
-def _validate_uuid(value: str, name: str) -> str | None:
+def _validate_uuid(value: object, name: str) -> str | None:
     """Validate UUID format. Returns error or None."""
-    if not _UUID_RE.match(value):
+    if not isinstance(value, str) or not _UUID_RE.match(value):
         return f"Invalid {name}: {value!r}. Must be a UUID."
     return None
 
