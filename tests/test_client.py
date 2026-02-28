@@ -1541,3 +1541,316 @@ class TestDeleteScheduledTransaction:
             await client.delete_scheduled_transaction(
                 "bad", _VALID_UUID_2
             )
+
+
+class TestGetUser:
+    @pytest.mark.anyio
+    async def test_returns_user(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {"user": {"id": "user-abc-123"}}
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.get_user()
+
+        assert result.id == "user-abc-123"
+        call_args = mock_req.call_args
+        assert call_args[0][0] == "GET"
+        assert call_args[0][1] == "/user"
+
+
+class TestGetBudgetSettings:
+    @pytest.mark.anyio
+    async def test_returns_settings(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "settings": {
+                    "date_format": {"format": "MM/DD/YYYY"},
+                    "currency_format": {
+                        "iso_code": "USD",
+                        "example_format": "123,456.78",
+                        "decimal_digits": 2,
+                        "decimal_separator": ".",
+                        "symbol_first": True,
+                        "group_separator": ",",
+                        "currency_symbol": "$",
+                        "display_symbol": True,
+                    },
+                }
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.get_budget_settings(
+                _VALID_UUID
+            )
+
+        assert result.date_format.format == "MM/DD/YYYY"
+        assert result.currency_format.iso_code == "USD"
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.get_budget_settings("bad")
+
+
+def _account_detail_data(
+    account_id: str,
+) -> dict[str, object]:
+    return {
+        "id": account_id,
+        "name": "Checking",
+        "type": "checking",
+        "balance": 15000,
+        "cleared_balance": 12000,
+        "closed": False,
+        "deleted": False,
+        "on_budget": True,
+        "note": "Main account",
+        "uncleared_balance": 3000,
+        "transfer_payee_id": "payee-1",
+    }
+
+
+class TestGetAccount:
+    @pytest.mark.anyio
+    async def test_returns_detail(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "account": _account_detail_data(
+                    _VALID_UUID_2
+                )
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.get_account(
+                _VALID_UUID, _VALID_UUID_2
+            )
+
+        assert result.id == _VALID_UUID_2
+        assert result.on_budget is True
+        assert result.note == "Main account"
+        assert result.uncleared_balance == Decimal("3")
+
+    @pytest.mark.anyio
+    async def test_invalid_account_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid account_id"
+        ):
+            await client.get_account(_VALID_UUID, "bad-id")
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.get_account("bad", _VALID_UUID_2)
+
+
+def _category_data(
+    category_id: str,
+) -> dict[str, object]:
+    return {
+        "id": category_id,
+        "name": "Groceries",
+        "category_group_id": "group-1",
+        "budgeted": 500000,
+        "activity": -250000,
+        "balance": 250000,
+        "note": "Weekly groceries",
+        "hidden": False,
+        "deleted": False,
+    }
+
+
+class TestGetCategory:
+    @pytest.mark.anyio
+    async def test_returns_category(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "category": _category_data(_VALID_UUID_2)
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.get_category(
+                _VALID_UUID, _VALID_UUID_2
+            )
+
+        assert result.id == _VALID_UUID_2
+        assert result.name == "Groceries"
+        assert result.budgeted == Decimal("500")
+
+    @pytest.mark.anyio
+    async def test_invalid_category_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid category_id"
+        ):
+            await client.get_category(_VALID_UUID, "bad-id")
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.get_category("bad", _VALID_UUID_2)
+
+
+class TestGetPayee:
+    @pytest.mark.anyio
+    async def test_returns_payee_detail(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "payee": {
+                    "id": _VALID_UUID_2,
+                    "name": "Costco",
+                    "deleted": False,
+                    "transfer_account_id": "acct-2",
+                }
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.get_payee(
+                _VALID_UUID, _VALID_UUID_2
+            )
+
+        assert result.id == _VALID_UUID_2
+        assert result.name == "Costco"
+        assert result.transfer_account_id == "acct-2"
+
+    @pytest.mark.anyio
+    async def test_invalid_payee_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid payee_id"
+        ):
+            await client.get_payee(_VALID_UUID, "bad-id")
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.get_payee("bad", _VALID_UUID_2)
+
+
+def _transaction_data(
+    transaction_id: str,
+) -> dict[str, object]:
+    return {
+        "id": transaction_id,
+        "account_id": "acct-1",
+        "account_name": "Checking",
+        "date": "2026-02-25",
+        "amount": -42500,
+        "payee_id": "payee-1",
+        "payee_name": "Costco",
+        "category_id": "cat-1",
+        "category_name": "Groceries",
+        "memo": "Weekly shop",
+        "cleared": "cleared",
+        "approved": True,
+        "deleted": False,
+    }
+
+
+class TestGetTransaction:
+    @pytest.mark.anyio
+    async def test_returns_transaction(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "transaction": _transaction_data(
+                    _VALID_UUID_2
+                )
+            }
+        }
+        with patch.object(
+            client._client, "request",
+            new_callable=AsyncMock,
+        ) as mock_req:
+            mock_req.return_value = _mock_response(
+                200, mock_data
+            )
+            result = await client.get_transaction(
+                _VALID_UUID, _VALID_UUID_2
+            )
+
+        assert result.id == _VALID_UUID_2
+        assert result.amount == Decimal("-42.5")
+        assert result.payee_name == "Costco"
+
+    @pytest.mark.anyio
+    async def test_invalid_transaction_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid transaction_id"
+        ):
+            await client.get_transaction(
+                _VALID_UUID, "bad-id"
+            )
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(
+        self, client: YNABClient
+    ) -> None:
+        with pytest.raises(
+            YNABError, match="Invalid budget_id"
+        ):
+            await client.get_transaction(
+                "bad", _VALID_UUID_2
+            )

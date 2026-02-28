@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Single-resource GET tools — `get_user`, `get_budget_settings`, `get_account`, `get_category`, `get_payee`, `get_transaction` with detailed output and deleted/closed status indicators
 - Scheduled transaction CRUD — `list_scheduled_transactions`, `get_scheduled_transaction`, `create_scheduled_transaction`, `update_scheduled_transaction`, `delete_scheduled_transaction` with frequency validation and dry-run support
 - `list_months` MCP tool — budget month summaries with income, budgeted, activity, available, and age of money
 - `get_month` MCP tool — single month detail with per-category breakdown, supports "current" shorthand

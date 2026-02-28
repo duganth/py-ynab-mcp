@@ -4,13 +4,18 @@ from decimal import Decimal
 
 from py_ynab_mcp.models import (
     Account,
+    AccountDetail,
+    BudgetSettings,
     BudgetSummary,
     Category,
     CategoryBudgetWrite,
     CategoryUpdate,
+    CurrencyFormat,
+    DateFormat,
     MonthDetail,
     MonthSummary,
     Payee,
+    PayeeDetail,
     ScheduledSubTransaction,
     ScheduledTransaction,
     ScheduledTransactionUpdate,
@@ -18,6 +23,7 @@ from py_ynab_mcp.models import (
     Transaction,
     TransactionUpdate,
     TransactionWrite,
+    User,
     dollars_to_milliunits,
     milliunits_to_dollars,
 )
@@ -509,3 +515,112 @@ class TestScheduledTransactionUpdateModel:
             "amount": -200000,
             "frequency": "weekly",
         }
+
+
+class TestUserModel:
+    def test_basic(self) -> None:
+        user = User(id="user-123")
+        assert user.id == "user-123"
+
+
+class TestAccountDetailModel:
+    def test_inherits_account_fields(self) -> None:
+        acct = AccountDetail(
+            id="acct-1",
+            name="Checking",
+            type="checking",
+            balance=15000,  # type: ignore[arg-type]
+            cleared_balance=12000,  # type: ignore[arg-type]
+            closed=False,
+            deleted=False,
+            on_budget=True,
+            note="Main account",
+            uncleared_balance=3000,  # type: ignore[arg-type]
+            transfer_payee_id="payee-1",
+        )
+        assert acct.balance == Decimal("15")
+        assert acct.cleared_balance == Decimal("12")
+        assert acct.uncleared_balance == Decimal("3")
+        assert acct.on_budget is True
+        assert acct.note == "Main account"
+        assert acct.transfer_payee_id == "payee-1"
+
+    def test_optional_fields_none(self) -> None:
+        acct = AccountDetail(
+            id="acct-1",
+            name="Savings",
+            type="savings",
+            balance=Decimal("100"),
+            cleared_balance=Decimal("100"),
+            closed=False,
+            deleted=False,
+            on_budget=False,
+            note=None,
+            uncleared_balance=Decimal("0"),
+            transfer_payee_id=None,
+        )
+        assert acct.note is None
+        assert acct.transfer_payee_id is None
+
+
+class TestDateFormatModel:
+    def test_basic(self) -> None:
+        df = DateFormat(format="MM/DD/YYYY")
+        assert df.format == "MM/DD/YYYY"
+
+
+class TestCurrencyFormatModel:
+    def test_basic(self) -> None:
+        cf = CurrencyFormat(
+            iso_code="USD",
+            example_format="123,456.78",
+            decimal_digits=2,
+            decimal_separator=".",
+            symbol_first=True,
+            group_separator=",",
+            currency_symbol="$",
+            display_symbol=True,
+        )
+        assert cf.iso_code == "USD"
+        assert cf.symbol_first is True
+        assert cf.decimal_digits == 2
+
+
+class TestBudgetSettingsModel:
+    def test_nested(self) -> None:
+        settings = BudgetSettings(
+            date_format=DateFormat(format="MM/DD/YYYY"),
+            currency_format=CurrencyFormat(
+                iso_code="USD",
+                example_format="123,456.78",
+                decimal_digits=2,
+                decimal_separator=".",
+                symbol_first=True,
+                group_separator=",",
+                currency_symbol="$",
+                display_symbol=True,
+            ),
+        )
+        assert settings.date_format.format == "MM/DD/YYYY"
+        assert settings.currency_format.iso_code == "USD"
+
+
+class TestPayeeDetailModel:
+    def test_inherits_payee_fields(self) -> None:
+        payee = PayeeDetail(
+            id="payee-1",
+            name="Costco",
+            deleted=False,
+            transfer_account_id="acct-2",
+        )
+        assert payee.name == "Costco"
+        assert payee.transfer_account_id == "acct-2"
+
+    def test_transfer_account_none(self) -> None:
+        payee = PayeeDetail(
+            id="payee-1",
+            name="Costco",
+            deleted=False,
+            transfer_account_id=None,
+        )
+        assert payee.transfer_account_id is None

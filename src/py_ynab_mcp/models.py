@@ -21,6 +21,21 @@ def dollars_to_milliunits(dollars: Decimal) -> int:
     return int(dollars * Decimal(1000))
 
 
+# --- User models ---
+
+
+class User(BaseModel):
+    """A YNAB user."""
+
+    id: str
+
+
+class UserResponse(BaseModel):
+    """Wrapper for YNAB user endpoint response."""
+
+    user: User
+
+
 # --- Account models ---
 
 
@@ -43,10 +58,34 @@ class Account(BaseModel):
         return v
 
 
+class AccountDetail(Account):
+    """A YNAB account with additional detail fields."""
+
+    on_budget: bool
+    note: str | None
+    uncleared_balance: Decimal
+    transfer_payee_id: str | None
+
+    @field_validator("uncleared_balance", mode="before")
+    @classmethod
+    def convert_uncleared_milliunits(
+        cls, v: int | Decimal
+    ) -> Decimal:
+        if isinstance(v, int):
+            return milliunits_to_dollars(v)
+        return v
+
+
 class AccountsResponse(BaseModel):
     """Wrapper for YNAB accounts endpoint response."""
 
     accounts: list[Account]
+
+
+class AccountDetailResponse(BaseModel):
+    """Wrapper for single account endpoint response."""
+
+    account: AccountDetail
 
 
 class BudgetSummary(BaseModel):
@@ -63,6 +102,38 @@ class BudgetSummaryResponse(BaseModel):
     """Wrapper for YNAB budgets endpoint response."""
 
     budgets: list[BudgetSummary]
+
+
+class DateFormat(BaseModel):
+    """YNAB date format setting."""
+
+    format: str
+
+
+class CurrencyFormat(BaseModel):
+    """YNAB currency format setting."""
+
+    iso_code: str
+    example_format: str
+    decimal_digits: int
+    decimal_separator: str
+    symbol_first: bool
+    group_separator: str
+    currency_symbol: str
+    display_symbol: bool
+
+
+class BudgetSettings(BaseModel):
+    """YNAB budget settings."""
+
+    date_format: DateFormat
+    currency_format: CurrencyFormat
+
+
+class BudgetSettingsResponse(BaseModel):
+    """Wrapper for budget settings endpoint response."""
+
+    settings: BudgetSettings
 
 
 # --- Transaction models ---
@@ -264,10 +335,22 @@ class Payee(BaseModel):
     deleted: bool
 
 
+class PayeeDetail(Payee):
+    """A YNAB payee with additional detail fields."""
+
+    transfer_account_id: str | None
+
+
 class PayeesResponse(BaseModel):
     """Wrapper for payees endpoint response."""
 
     payees: list[Payee]
+
+
+class PayeeDetailResponse(BaseModel):
+    """Wrapper for single payee endpoint response."""
+
+    payee: PayeeDetail
 
 
 # --- Scheduled Transaction models ---

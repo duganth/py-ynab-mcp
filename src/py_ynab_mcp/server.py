@@ -1491,6 +1491,267 @@ async def delete_scheduled_transaction(
         return "An unexpected error occurred."
 
 
+@mcp.tool()
+async def get_user(ctx: ToolContext) -> str:
+    """Get the authenticated YNAB user.
+
+    Returns the user ID.
+    """
+    try:
+        client = _get_client(ctx)
+        user = await client.get_user()
+        response = f"User ID: `{user.id}`"
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def get_budget_settings(
+    ctx: ToolContext, budget_id: str | None = None
+) -> str:
+    """Get budget settings including date and currency format.
+
+    Args:
+        budget_id: Budget ID. Defaults to last-used budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+
+    try:
+        client = _get_client(ctx)
+        settings = await client.get_budget_settings(bid)
+
+        df = settings.date_format
+        cf = settings.currency_format
+        lines = [
+            "**Date Format**",
+            f"  Format: {df.format}",
+            "",
+            "**Currency Format**",
+            f"  ISO code: {cf.iso_code}",
+            f"  Symbol: {cf.currency_symbol}"
+            f" ({'before' if cf.symbol_first else 'after'})",
+            f"  Example: {cf.example_format}",
+            f"  Decimals: {cf.decimal_digits}",
+            f"  Decimal separator: {cf.decimal_separator!r}",
+            f"  Group separator: {cf.group_separator!r}",
+        ]
+        response = "\n".join(lines)
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def get_account(
+    ctx: ToolContext,
+    account_id: str,
+    budget_id: str | None = None,
+) -> str:
+    """Get a single YNAB account with full details.
+
+    Returns balance, type, on-budget status, note, and more.
+
+    Args:
+        account_id: Account UUID.
+        budget_id: Budget ID. Defaults to last-used budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(account_id, "account_id")
+    if err:
+        return err
+
+    try:
+        client = _get_client(ctx)
+        acct = await client.get_account(bid, account_id)
+
+        bal = _format_dollars(acct.balance)
+        cleared = _format_dollars(acct.cleared_balance)
+        uncleared = _format_dollars(acct.uncleared_balance)
+        status_parts: list[str] = []
+        if acct.closed:
+            status_parts.append("CLOSED")
+        if acct.deleted:
+            status_parts.append("DELETED")
+        status_suffix = (
+            f" [{', '.join(status_parts)}]"
+            if status_parts else ""
+        )
+        lines = [
+            f"**{acct.name}** ({acct.type}){status_suffix}",
+            f"  Balance: {bal}",
+            f"  Cleared: {cleared}",
+            f"  Uncleared: {uncleared}",
+            f"  On budget: {'Yes' if acct.on_budget else 'No'}",
+        ]
+        if acct.note:
+            lines.append(f"  Note: {acct.note}")
+        if acct.transfer_payee_id:
+            lines.append(
+                f"  Transfer payee ID: `{acct.transfer_payee_id}`"
+            )
+        lines.append(f"  ID: `{acct.id}`")
+        response = "\n".join(lines)
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def get_category(
+    ctx: ToolContext,
+    category_id: str,
+    budget_id: str | None = None,
+) -> str:
+    """Get a single YNAB category with budget details.
+
+    Returns budgeted, activity, balance, and metadata.
+
+    Args:
+        category_id: Category UUID.
+        budget_id: Budget ID. Defaults to last-used budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(category_id, "category_id")
+    if err:
+        return err
+
+    try:
+        client = _get_client(ctx)
+        cat = await client.get_category(bid, category_id)
+
+        deleted_tag = " [DELETED]" if cat.deleted else ""
+        lines = [
+            f"**{cat.name}**{deleted_tag}",
+            f"  Budgeted: {_format_dollars(cat.budgeted)}",
+            f"  Activity: {_format_dollars(cat.activity)}",
+            f"  Balance: {_format_dollars(cat.balance)}",
+        ]
+        if cat.note:
+            lines.append(f"  Note: {cat.note}")
+        if cat.hidden:
+            lines.append("  Hidden: Yes")
+        if cat.category_group_id:
+            lines.append(
+                f"  Group ID: `{cat.category_group_id}`"
+            )
+        lines.append(f"  ID: `{cat.id}`")
+        response = "\n".join(lines)
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def get_payee(
+    ctx: ToolContext,
+    payee_id: str,
+    budget_id: str | None = None,
+) -> str:
+    """Get a single YNAB payee.
+
+    Args:
+        payee_id: Payee UUID.
+        budget_id: Budget ID. Defaults to last-used budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(payee_id, "payee_id")
+    if err:
+        return err
+
+    try:
+        client = _get_client(ctx)
+        payee = await client.get_payee(bid, payee_id)
+
+        deleted_tag = " [DELETED]" if payee.deleted else ""
+        lines = [f"**{payee.name}**{deleted_tag}"]
+        if payee.transfer_account_id:
+            lines.append(
+                f"  Transfer account ID: "
+                f"`{payee.transfer_account_id}`"
+            )
+        lines.append(f"  ID: `{payee.id}`")
+        response = "\n".join(lines)
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
+@mcp.tool()
+async def get_transaction(
+    ctx: ToolContext,
+    transaction_id: str,
+    budget_id: str | None = None,
+) -> str:
+    """Get a single YNAB transaction with full details.
+
+    Args:
+        transaction_id: Transaction UUID.
+        budget_id: Budget ID. Defaults to last-used budget.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(transaction_id, "transaction_id")
+    if err:
+        return err
+
+    try:
+        client = _get_client(ctx)
+        txn = await client.get_transaction(bid, transaction_id)
+
+        deleted_tag = " [DELETED]" if txn.deleted else ""
+        lines = [
+            _format_transaction(txn) + deleted_tag,
+            f"  Account: {txn.account_name}",
+            f"  Status: {txn.cleared}"
+            f" ({'approved' if txn.approved else 'unapproved'})",
+        ]
+        if txn.payee_id:
+            lines.append(f"  Payee ID: `{txn.payee_id}`")
+        if txn.category_id:
+            lines.append(
+                f"  Category ID: `{txn.category_id}`"
+            )
+        lines.append(f"  Account ID: `{txn.account_id}`")
+        lines.append(f"  ID: `{txn.id}`")
+        response = "\n".join(lines)
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception:
+        return "An unexpected error occurred."
+
+
 def main() -> None:
     """Run the MCP server."""
     mcp.run()

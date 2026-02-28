@@ -8,16 +8,22 @@ import pytest
 from py_ynab_mcp.client import YNABError
 from py_ynab_mcp.models import (
     Account,
+    AccountDetail,
+    BudgetSettings,
     BudgetSummary,
     BulkResult,
     Category,
     CategoryGroup,
+    CurrencyFormat,
+    DateFormat,
     MonthDetail,
     MonthSummary,
     Payee,
+    PayeeDetail,
     ScheduledSubTransaction,
     ScheduledTransaction,
     Transaction,
+    User,
 )
 from py_ynab_mcp.server import (
     create_scheduled_transaction,
@@ -25,8 +31,14 @@ from py_ynab_mcp.server import (
     create_transactions,
     delete_scheduled_transaction,
     delete_transaction,
+    get_account,
+    get_budget_settings,
+    get_category,
     get_month,
+    get_payee,
     get_scheduled_transaction,
+    get_transaction,
+    get_user,
     list_accounts,
     list_budgets,
     list_categories,
@@ -2296,3 +2308,485 @@ class TestDeleteScheduledTransaction:
         )
 
         assert "Invalid budget_id" in result
+
+
+# --- get_user ---
+
+
+class TestGetUser:
+    @pytest.mark.anyio
+    async def test_returns_user_id(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_user.return_value = User(
+            id="user-abc-123"
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_user(ctx=_mock_ctx(mock_client))
+
+        assert "user-abc-123" in result
+        mock_client.get_user.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_user.side_effect = YNABError(
+            401, "Invalid access token"
+        )
+
+        result = await get_user(ctx=_mock_ctx(mock_client))
+
+        assert "Invalid access token" in result
+
+
+# --- get_budget_settings ---
+
+
+def _make_budget_settings() -> BudgetSettings:
+    return BudgetSettings(
+        date_format=DateFormat(format="MM/DD/YYYY"),
+        currency_format=CurrencyFormat(
+            iso_code="USD",
+            example_format="123,456.78",
+            decimal_digits=2,
+            decimal_separator=".",
+            symbol_first=True,
+            group_separator=",",
+            currency_symbol="$",
+            display_symbol=True,
+        ),
+    )
+
+
+class TestGetBudgetSettings:
+    @pytest.mark.anyio
+    async def test_returns_settings(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_budget_settings.return_value = (
+            _make_budget_settings()
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_budget_settings(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "MM/DD/YYYY" in result
+        assert "USD" in result
+        assert "$" in result
+        assert "before" in result
+
+    @pytest.mark.anyio
+    async def test_symbol_after(self) -> None:
+        mock_client = AsyncMock()
+        settings = _make_budget_settings()
+        settings.currency_format.symbol_first = False
+        mock_client.get_budget_settings.return_value = (
+            settings
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_budget_settings(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "after" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await get_budget_settings(
+            ctx=_mock_ctx(), budget_id="bad"
+        )
+
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_budget_settings.side_effect = (
+            YNABError(404, "Not found")
+        )
+
+        result = await get_budget_settings(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "Not found" in result
+
+
+# --- get_account ---
+
+
+def _make_account_detail(
+    name: str = "Checking",
+    on_budget: bool = True,
+    note: str | None = "Main account",
+) -> AccountDetail:
+    return AccountDetail(
+        id=_VALID_UUID,
+        name=name,
+        type="checking",
+        balance=Decimal("150.00"),
+        cleared_balance=Decimal("120.00"),
+        closed=False,
+        deleted=False,
+        on_budget=on_budget,
+        note=note,
+        uncleared_balance=Decimal("30.00"),
+        transfer_payee_id="payee-1",
+    )
+
+
+class TestGetAccount:
+    @pytest.mark.anyio
+    async def test_returns_detail(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_account.return_value = (
+            _make_account_detail()
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_account(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+        )
+
+        assert "Checking" in result
+        assert "$150.00" in result
+        assert "$120.00" in result
+        assert "$30.00" in result
+        assert "Yes" in result  # on_budget
+        assert "Main account" in result
+
+    @pytest.mark.anyio
+    async def test_no_note(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_account.return_value = (
+            _make_account_detail(note=None)
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_account(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+        )
+
+        assert "Note" not in result
+
+    @pytest.mark.anyio
+    async def test_off_budget(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_account.return_value = (
+            _make_account_detail(on_budget=False)
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_account(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+        )
+
+        assert "No" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_account_id(self) -> None:
+        result = await get_account(
+            ctx=_mock_ctx(),
+            account_id="bad",
+        )
+
+        assert "Invalid account_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await get_account(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            budget_id="bad",
+        )
+
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_account.side_effect = YNABError(
+            404, "Not found"
+        )
+
+        result = await get_account(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+        )
+
+        assert "Not found" in result
+
+
+# --- get_category ---
+
+
+def _make_category_detail(
+    note: str | None = "Weekly groceries",
+    hidden: bool = False,
+) -> Category:
+    return Category(
+        id=_VALID_UUID,
+        name="Groceries",
+        category_group_id="group-1",
+        budgeted=Decimal("500.00"),
+        activity=Decimal("-250.00"),
+        balance=Decimal("250.00"),
+        note=note,
+        hidden=hidden,
+        deleted=False,
+    )
+
+
+class TestGetCategory:
+    @pytest.mark.anyio
+    async def test_returns_category(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_category.return_value = (
+            _make_category_detail()
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+        )
+
+        assert "Groceries" in result
+        assert "$500.00" in result
+        assert "-$250.00" in result
+        assert "$250.00" in result
+        assert "Weekly groceries" in result
+
+    @pytest.mark.anyio
+    async def test_hidden_category(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_category.return_value = (
+            _make_category_detail(hidden=True)
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+        )
+
+        assert "Hidden: Yes" in result
+
+    @pytest.mark.anyio
+    async def test_no_note(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_category.return_value = (
+            _make_category_detail(note=None)
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+        )
+
+        assert "Note" not in result
+
+    @pytest.mark.anyio
+    async def test_invalid_category_id(self) -> None:
+        result = await get_category(
+            ctx=_mock_ctx(),
+            category_id="bad",
+        )
+
+        assert "Invalid category_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await get_category(
+            ctx=_mock_ctx(),
+            category_id=_VALID_UUID,
+            budget_id="bad",
+        )
+
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_category.side_effect = YNABError(
+            404, "Not found"
+        )
+
+        result = await get_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+        )
+
+        assert "Not found" in result
+
+
+# --- get_payee ---
+
+
+class TestGetPayee:
+    @pytest.mark.anyio
+    async def test_returns_payee(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_payee.return_value = PayeeDetail(
+            id=_VALID_UUID,
+            name="Costco",
+            deleted=False,
+            transfer_account_id="acct-2",
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_payee(
+            ctx=_mock_ctx(mock_client),
+            payee_id=_VALID_UUID,
+        )
+
+        assert "Costco" in result
+        assert "acct-2" in result
+
+    @pytest.mark.anyio
+    async def test_no_transfer_account(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_payee.return_value = PayeeDetail(
+            id=_VALID_UUID,
+            name="Costco",
+            deleted=False,
+            transfer_account_id=None,
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_payee(
+            ctx=_mock_ctx(mock_client),
+            payee_id=_VALID_UUID,
+        )
+
+        assert "Costco" in result
+        assert "Transfer" not in result
+
+    @pytest.mark.anyio
+    async def test_invalid_payee_id(self) -> None:
+        result = await get_payee(
+            ctx=_mock_ctx(),
+            payee_id="bad",
+        )
+
+        assert "Invalid payee_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await get_payee(
+            ctx=_mock_ctx(),
+            payee_id=_VALID_UUID,
+            budget_id="bad",
+        )
+
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_payee.side_effect = YNABError(
+            404, "Not found"
+        )
+
+        result = await get_payee(
+            ctx=_mock_ctx(mock_client),
+            payee_id=_VALID_UUID,
+        )
+
+        assert "Not found" in result
+
+
+# --- get_transaction ---
+
+
+def _make_transaction_detail() -> Transaction:
+    return Transaction(
+        id=_VALID_UUID,
+        account_id="acct-1",
+        account_name="Checking",
+        date="2026-02-25",
+        amount=Decimal("-42.50"),
+        payee_id="payee-1",
+        payee_name="Costco",
+        category_id="cat-1",
+        category_name="Groceries",
+        memo="Weekly shop",
+        cleared="cleared",
+        approved=True,
+        deleted=False,
+    )
+
+
+class TestGetTransaction:
+    @pytest.mark.anyio
+    async def test_returns_transaction(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_transaction.return_value = (
+            _make_transaction_detail()
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+        )
+
+        assert "-$42.50" in result
+        assert "Costco" in result
+        assert "Checking" in result
+        assert "cleared" in result
+        assert "approved" in result
+
+    @pytest.mark.anyio
+    async def test_unapproved(self) -> None:
+        mock_client = AsyncMock()
+        txn = _make_transaction_detail()
+        txn.approved = False
+        mock_client.get_transaction.return_value = txn
+        mock_client.rate_limit_remaining = None
+
+        result = await get_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+        )
+
+        assert "unapproved" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_transaction_id(self) -> None:
+        result = await get_transaction(
+            ctx=_mock_ctx(),
+            transaction_id="bad",
+        )
+
+        assert "Invalid transaction_id" in result
+
+    @pytest.mark.anyio
+    async def test_invalid_budget_id(self) -> None:
+        result = await get_transaction(
+            ctx=_mock_ctx(),
+            transaction_id=_VALID_UUID,
+            budget_id="bad",
+        )
+
+        assert "Invalid budget_id" in result
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_transaction.side_effect = YNABError(
+            404, "Not found"
+        )
+
+        result = await get_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+        )
+
+        assert "Not found" in result

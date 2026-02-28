@@ -8,7 +8,11 @@ from pydantic import ValidationError
 
 from py_ynab_mcp.models import (
     Account,
+    AccountDetail,
+    AccountDetailResponse,
     AccountsResponse,
+    BudgetSettings,
+    BudgetSettingsResponse,
     BudgetSummary,
     BudgetSummaryResponse,
     BulkCreateResponse,
@@ -24,6 +28,8 @@ from py_ynab_mcp.models import (
     MonthsResponse,
     MonthSummary,
     Payee,
+    PayeeDetail,
+    PayeeDetailResponse,
     PayeesResponse,
     ScheduledTransaction,
     ScheduledTransactionResponse,
@@ -35,6 +41,8 @@ from py_ynab_mcp.models import (
     TransactionsResponse,
     TransactionUpdate,
     TransactionWrite,
+    User,
+    UserResponse,
 )
 
 YNAB_BASE_URL = "https://api.ynab.com/v1"
@@ -426,9 +434,17 @@ class YNABClient:
             f"/budgets/{budget_id}/transactions/{transaction_id}",
         )
 
+    def _validate_account_id(self, account_id: str) -> None:
+        if not _UUID_RE.match(account_id):
+            raise YNABError(400, "Invalid account_id format")
+
     def _validate_category_id(self, category_id: str) -> None:
         if not _UUID_RE.match(category_id):
             raise YNABError(400, "Invalid category_id format")
+
+    def _validate_payee_id(self, payee_id: str) -> None:
+        if not _UUID_RE.match(payee_id):
+            raise YNABError(400, "Invalid payee_id format")
 
     async def update_category_budget(
         self,
@@ -618,6 +634,105 @@ class YNABClient:
             f"/scheduled_transactions"
             f"/{scheduled_transaction_id}",
         )
+
+    async def get_user(self) -> User:
+        """Get the authenticated user."""
+        data = await self._request("GET", "/user")
+        try:
+            parsed = UserResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.user
+
+    async def get_budget_settings(
+        self, budget_id: str = "last-used"
+    ) -> BudgetSettings:
+        """Get budget settings (date/currency format)."""
+        self._validate_budget_id(budget_id)
+        data = await self._request(
+            "GET", f"/budgets/{budget_id}/settings"
+        )
+        try:
+            parsed = BudgetSettingsResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.settings
+
+    async def get_account(
+        self, budget_id: str, account_id: str
+    ) -> AccountDetail:
+        """Get a single account with full detail."""
+        self._validate_budget_id(budget_id)
+        self._validate_account_id(account_id)
+        data = await self._request(
+            "GET",
+            f"/budgets/{budget_id}/accounts/{account_id}",
+        )
+        try:
+            parsed = AccountDetailResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.account
+
+    async def get_category(
+        self, budget_id: str, category_id: str
+    ) -> Category:
+        """Get a single category."""
+        self._validate_budget_id(budget_id)
+        self._validate_category_id(category_id)
+        data = await self._request(
+            "GET",
+            f"/budgets/{budget_id}/categories/{category_id}",
+        )
+        try:
+            parsed = CategoryResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.category
+
+    async def get_payee(
+        self, budget_id: str, payee_id: str
+    ) -> PayeeDetail:
+        """Get a single payee with full detail."""
+        self._validate_budget_id(budget_id)
+        self._validate_payee_id(payee_id)
+        data = await self._request(
+            "GET",
+            f"/budgets/{budget_id}/payees/{payee_id}",
+        )
+        try:
+            parsed = PayeeDetailResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.payee
+
+    async def get_transaction(
+        self, budget_id: str, transaction_id: str
+    ) -> Transaction:
+        """Get a single transaction."""
+        self._validate_budget_id(budget_id)
+        self._validate_transaction_id(transaction_id)
+        data = await self._request(
+            "GET",
+            f"/budgets/{budget_id}/transactions/{transaction_id}",
+        )
+        try:
+            parsed = TransactionResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.transaction
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

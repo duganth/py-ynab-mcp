@@ -60,29 +60,27 @@ MCP Client (Claude) → MCP Server → YNAB API v1 (https://api.ynab.com/v1)
 | Resource | Endpoints | Delta sync |
 |---|---|---|
 | User | get | no |
-| Budgets | list, get, settings | yes |
+| Budgets | list, settings | no |
 | Accounts | list, get | yes |
-| Categories | list, get, get by month | yes |
+| Categories | list, get | yes |
 | Payees | list, get | yes |
-| Payee Locations | list, get, get by payee | no |
 | Months | list, get | yes |
-| Transactions | list (by account/category/payee/month), get | yes |
+| Transactions | list (by account/category/payee), get | yes |
 | Scheduled Transactions | list, get | yes |
 
 ### Write operations
 | Resource | Operations |
 |---|---|
-| Accounts | create |
 | Categories | update, update monthly budget |
-| Payees | update |
-| Transactions | create (single/bulk), update (single/bulk), delete, import |
+| Transactions | create (single/bulk), update (single/bulk), delete |
 | Scheduled Transactions | create, update, delete |
 
 ### Not available in YNAB API
 - Create/delete budgets
 - Create/delete categories
-- Create payees (auto-created via transactions)
-- Delete accounts
+- Create/delete accounts
+- Create/update/delete payees (auto-created via transactions)
+- Transaction import (no API endpoint)
 
 ## Roadmap
 
