@@ -2165,6 +2165,22 @@ class TestCreateScheduledTransaction:
         assert "Invalid frequency" in result
 
     @pytest.mark.anyio
+    async def test_multiword_frequency_blocked_preflight(self) -> None:
+        # YNAB's API rejects every multi-word camelCase frequency on
+        # both create and update. Validate before round-tripping so the
+        # caller gets an actionable error.
+        result = await create_scheduled_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="-150.00",
+            date="2026-03-01",
+            frequency="twiceAMonth",
+        )
+
+        assert "rejected by YNAB" in result
+        assert "YNAB UI" in result
+
+    @pytest.mark.anyio
     async def test_invalid_amount(self) -> None:
         result = await create_scheduled_transaction(
             ctx=_mock_ctx(),

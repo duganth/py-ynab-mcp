@@ -1070,6 +1070,17 @@ _FREQUENCY_VALUES = {
     "twiceAYear", "yearly", "everyOtherYear",
 }
 
+# YNAB's own API rejects every multi-word camelCase frequency on both
+# create and update endpoints — their backend splits the value at
+# uppercase/digit boundaries, title-cases the pieces, and then validates
+# the mangled result against their own enum (e.g. "twiceAMonth" becomes
+# "Twice A Month", which fails). Only single-word values round-trip.
+# Verified against api.ynab.com/v1 on 2026-05-18. Update this set if
+# YNAB fixes their backend.
+_YNAB_API_WORKING_FREQUENCIES = {
+    "never", "daily", "weekly", "monthly", "yearly",
+}
+
 _FREQUENCY_LABELS: dict[str, str] = {
     "never": "Never",
     "daily": "Daily",
@@ -1098,6 +1109,15 @@ def _validate_frequency(frequency: str) -> str | None:
         return (
             f"Invalid frequency: {frequency!r}. "
             f"Must be one of: {', '.join(sorted(_FREQUENCY_VALUES))}."
+        )
+    if frequency not in _YNAB_API_WORKING_FREQUENCIES:
+        return (
+            f"Frequency {frequency!r} ({_format_frequency(frequency)}) "
+            "is rejected by YNAB's own API — their backend mangles "
+            "multi-word camelCase frequencies and rejects the result. "
+            "Only single-word values work via API: "
+            f"{', '.join(sorted(_YNAB_API_WORKING_FREQUENCIES))}. "
+            "Set it manually in the YNAB UI instead."
         )
     return None
 
@@ -1247,8 +1267,11 @@ async def create_scheduled_transaction(
         account_id: Account UUID.
         amount: Dollar amount ("-42.50" for outflow, "100.00" for inflow).
         date: First occurrence date (YYYY-MM-DD).
-        frequency: Recurrence frequency (e.g. "monthly", "weekly",
-            "everyOtherWeek", "yearly"). See YNAB docs for all values.
+        frequency: Recurrence frequency. Only single-word values work
+            via the YNAB API: "never", "daily", "weekly", "monthly",
+            "yearly". Multi-word camelCase values (everyOtherWeek,
+            twiceAMonth, etc.) are documented but rejected by YNAB's
+            own backend — set those manually in the YNAB UI.
         payee_name: Payee name.
         category_id: Category UUID.
         memo: Transaction memo.
@@ -1353,7 +1376,10 @@ async def update_scheduled_transaction(
         account_id: New account UUID.
         amount: New dollar amount.
         date: New first date (YYYY-MM-DD).
-        frequency: New frequency.
+        frequency: New frequency. Only single-word values work via
+            the YNAB API: "never", "daily", "weekly", "monthly",
+            "yearly". Multi-word values are rejected by YNAB's
+            backend — change those in the UI.
         payee_name: New payee name.
         category_id: New category UUID.
         memo: New memo.
