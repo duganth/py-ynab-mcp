@@ -1,6 +1,6 @@
 [project]
 name = "py-ynab-mcp"
-version = "0.2.0"
+version = "0.2.1"
 description = "A Model Context Protocol server for YNAB (You Need A Budget)"
 readme = "README.md"
 license = "MIT"
@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "mcp[cli]",
+    "mcp[cli]>=1.2,<2",
     "httpx",
     "pydantic",
 ]

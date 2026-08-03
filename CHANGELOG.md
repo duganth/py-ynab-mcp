@@ -6,6 +6,7 @@
 - `update_payee` tool — rename payees via YNAB PATCH endpoint with dry-run support
 
 ### Fixed
+- Pin `mcp[cli]>=1.2,<2` — mcp 2.0.0 removed `mcp.server.fastmcp`, so fresh installs crashed on import with `ModuleNotFoundError`
 - Bulk create response model — was expecting a `bulk` wrapper that YNAB doesn't send, causing `ValidationError` on every `create_transactions` call
 - `dollars_to_milliunits` now rejects amounts with >3 decimal places instead of silently truncating
 - Date validation rejects impossible calendar dates (Feb 31, Apr 31, etc.) using `datetime.date()`
