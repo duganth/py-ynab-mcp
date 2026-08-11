@@ -9,6 +9,10 @@
 - `update_payee` tool — rename payees via YNAB PATCH endpoint with dry-run support
 
 ### Fixed
+- Transaction IDs — `get_transaction`, `update_transaction`, and `delete_transaction` rejected the `<uuid>_<YYYY-MM-DD>` IDs that YNAB returns for auto-entered scheduled occurrences, so rows `list_transactions` printed could not be read back or deleted
+- `list_categories` no longer presents "Inflow: Ready to Assign" as a spendable balance — that figure is cumulative net income, not money left to assign, and reading it as the latter overstates available funds by the whole month's assignments. Other category balances are now labelled "available"
+- `list_months` and `get_month` label `to_be_budgeted` as "Ready to Assign" instead of "Available", which collided with per-category available amounts in the same output
+- `list_transactions` rows now flag `uncleared`/`reconciled`, `unapproved`, and `scheduled` status — previously an auto-entered scheduled transaction was indistinguishable from a hand-entered one, making it easy to duplicate a charge when reconciling against a bank statement
 - Category reads now expose target underfunding and cadence metadata; recurring target frequency writes are validated against YNAB's documented monthly, weekly, and yearly values
 - Pin `mcp[cli]>=1.2,<2` — mcp 2.0.0 removed `mcp.server.fastmcp`, so fresh installs crashed on import with `ModuleNotFoundError`
 - Bulk create response model — was expecting a `bulk` wrapper that YNAB doesn't send, causing `ValidationError` on every `create_transactions` call

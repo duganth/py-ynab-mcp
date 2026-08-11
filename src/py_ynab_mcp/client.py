@@ -56,6 +56,13 @@ _BUDGET_ID_RE = re.compile(
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
+# Auto-entered scheduled occurrences come back as
+# "<scheduled-uuid>_<YYYY-MM-DD>" and are addressable like any other
+# transaction, so transaction ids get a looser pattern than plain UUIDs.
+_TXN_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"(?:_\d{4}-\d{2}-\d{2})?$"
+)
 
 
 class YNABError(Exception):
@@ -95,7 +102,7 @@ class YNABClient:
             raise YNABError(400, "Invalid budget_id format")
 
     def _validate_transaction_id(self, transaction_id: str) -> None:
-        if not _UUID_RE.match(transaction_id):
+        if not _TXN_ID_RE.match(transaction_id):
             raise YNABError(400, "Invalid transaction_id format")
 
     async def _request(

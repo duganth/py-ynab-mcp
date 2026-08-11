@@ -93,6 +93,8 @@ def _make_transaction(
     payee_name: str | None = "Costco",
     category_name: str | None = "Groceries",
     memo: str | None = "Weekly shop",
+    cleared: str = "cleared",
+    approved: bool = True,
 ) -> Transaction:
     return Transaction(
         id=txn_id,
@@ -105,8 +107,8 @@ def _make_transaction(
         category_id=None,
         category_name=category_name,
         memo=memo,
-        cleared="cleared",
-        approved=True,
+        cleared=cleared,
+        approved=approved,
         deleted=False,
     )
 
@@ -3685,3 +3687,252 @@ class TestListBudgetsRateLimit:
 
         assert "Rate limit" in result
         assert "10/200" in result
+
+
+_SCHEDULED_TXN_ID = f"{_VALID_UUID}_2026-08-09"
+
+
+class TestScheduledOccurrenceIds:
+    """YNAB returns auto-entered scheduled rows as <uuid>_<date>.
+
+    list_transactions prints those ids, so every tool that takes a
+    transaction_id has to accept them back.
+    """
+
+    @pytest.mark.anyio
+    async def test_get_transaction_accepts_occurrence_id(
+        self,
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.get_transaction.return_value = (
+            _make_transaction(txn_id=_SCHEDULED_TXN_ID)
+        )
+
+        result = await get_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_SCHEDULED_TXN_ID,
+        )
+
+        assert "Invalid transaction_id" not in result
+        mock_client.get_transaction.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_delete_transaction_accepts_occurrence_id(
+        self,
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+
+        result = await delete_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_SCHEDULED_TXN_ID,
+        )
+
+        assert "Invalid transaction_id" not in result
+        mock_client.delete_transaction.assert_awaited_once()
+
+    @pytest.mark.anyio
+    async def test_update_transaction_accepts_occurrence_id(
+        self,
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.update_transaction.return_value = (
+            _make_transaction(txn_id=_SCHEDULED_TXN_ID)
+        )
+
+        result = await update_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_SCHEDULED_TXN_ID,
+            memo="touched",
+        )
+
+        assert "Invalid transaction_id" not in result
+
+    @pytest.mark.anyio
+    async def test_still_rejects_junk_ids(self) -> None:
+        for bad in (
+            "../../evil",
+            f"{_VALID_UUID}_not-a-date",
+            f"{_VALID_UUID}_2026-08-09_extra",
+            "_2026-08-09",
+        ):
+            result = await get_transaction(
+                ctx=_mock_ctx(), transaction_id=bad
+            )
+            assert "Invalid transaction_id" in result, bad
+
+
+class TestTransactionStatusFlags:
+    @pytest.mark.anyio
+    async def test_cleared_approved_row_has_no_flags(
+        self,
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.get_transactions.return_value = [
+            _make_transaction()
+        ]
+
+        result = await list_transactions(
+            ctx=_mock_ctx(mock_client),
+            since_date="2026-08-01",
+        )
+
+        assert "[" not in result.split("ID:")[0]
+
+    @pytest.mark.anyio
+    async def test_uncleared_and_unapproved_are_flagged(
+        self,
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.get_transactions.return_value = [
+            _make_transaction(
+                cleared="uncleared", approved=False
+            )
+        ]
+
+        result = await list_transactions(
+            ctx=_mock_ctx(mock_client),
+            since_date="2026-08-01",
+        )
+
+        assert "[uncleared, unapproved]" in result
+
+    @pytest.mark.anyio
+    async def test_reconciled_is_flagged(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.get_transactions.return_value = [
+            _make_transaction(cleared="reconciled")
+        ]
+
+        result = await list_transactions(
+            ctx=_mock_ctx(mock_client),
+            since_date="2026-08-01",
+        )
+
+        assert "[reconciled]" in result
+
+    @pytest.mark.anyio
+    async def test_scheduled_occurrence_is_flagged(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.get_transactions.return_value = [
+            _make_transaction(txn_id=_SCHEDULED_TXN_ID)
+        ]
+
+        result = await list_transactions(
+            ctx=_mock_ctx(mock_client),
+            since_date="2026-08-01",
+        )
+
+        assert "[scheduled]" in result
+
+
+class TestReadyToAssignPresentation:
+    @pytest.mark.anyio
+    async def test_rta_category_is_not_labelled_available(
+        self,
+    ) -> None:
+        groups = [
+            CategoryGroup(
+                id="internal-1",
+                name="Internal Master Category",
+                deleted=False,
+                categories=[
+                    Category(
+                        id=_VALID_UUID,
+                        name="Inflow: Ready to Assign",
+                        budgeted=Decimal("0"),
+                        activity=Decimal("43204.59"),
+                        balance=Decimal("43204.59"),
+                        deleted=False,
+                    ),
+                ],
+            ),
+        ]
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.get_categories.return_value = groups
+
+        result = await list_categories(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "net income" in result
+        assert "NOT Ready to Assign" in result
+        assert "get_month" in result
+        assert "$43,204.59 available" not in result
+
+    @pytest.mark.anyio
+    async def test_normal_category_balance_is_labelled(
+        self,
+    ) -> None:
+        groups = [
+            CategoryGroup(
+                id="group-1",
+                name="Monthly Bills",
+                deleted=False,
+                categories=[
+                    Category(
+                        id=_VALID_UUID,
+                        name="Rent",
+                        budgeted=Decimal("1500"),
+                        activity=Decimal("-1200"),
+                        balance=Decimal("300"),
+                        deleted=False,
+                    ),
+                ],
+            ),
+        ]
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.get_categories.return_value = groups
+
+        result = await list_categories(
+            ctx=_mock_ctx(mock_client)
+        )
+
+        assert "$300.00 available" in result
+        assert "NOT Ready to Assign" not in result
+
+    @pytest.mark.anyio
+    async def test_get_month_labels_to_be_budgeted(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.get_month.return_value = MonthDetail(
+            month="2026-08-01",
+            income=Decimal("46537.21"),
+            budgeted=Decimal("24925.62"),
+            activity=Decimal("-1634.26"),
+            to_be_budgeted=Decimal("5577.49"),
+            age_of_money=0,
+            note=None,
+            deleted=False,
+            categories=[],
+        )
+
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-08-01"
+        )
+
+        assert "Ready to Assign: $5,577.49" in result
+        assert "- Available:" not in result
+
+    @pytest.mark.anyio
+    async def test_list_months_labels_to_be_budgeted(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.rate_limit_remaining = None
+        mock_client.get_months.return_value = [
+            _make_month_summary(
+                to_be_budgeted=Decimal("5577.49")
+            )
+        ]
+
+        result = await list_months(ctx=_mock_ctx(mock_client))
+
+        assert "Ready to Assign $5,577.49" in result
+        assert "Available $" not in result

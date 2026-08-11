@@ -55,6 +55,15 @@ _BUDGET_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-"
     r"[0-9a-f]{12}$|^last-used$|^default$"
 )
+# YNAB returns auto-entered scheduled occurrences with a composite id:
+# "<scheduled-uuid>_<YYYY-MM-DD>". Those ids are valid transaction
+# references, so read/write tools must accept them.
+_TXN_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"(?:_\d{4}-\d{2}-\d{2})?$"
+)
+_INTERNAL_GROUP_NAME = "internal master category"
+_RTA_CATEGORY_NAME = "Inflow: Ready to Assign"
 _CLEARED_VALUES = {"cleared", "uncleared", "reconciled"}
 _TRANSACTION_TYPE_VALUES = {"uncategorized", "unapproved"}
 _RATE_LIMIT_THRESHOLD = 20
@@ -131,6 +140,20 @@ def _validate_uuid(value: object, name: str) -> str | None:
     """Validate UUID format. Returns error or None."""
     if not isinstance(value, str) or not _UUID_RE.match(value):
         return f"Invalid {name}: {value!r}. Must be a UUID."
+    return None
+
+
+def _validate_transaction_id(value: object, name: str) -> str | None:
+    """Validate a transaction id. Returns error or None.
+
+    Accepts a plain UUID or a scheduled-occurrence id
+    ("<uuid>_<YYYY-MM-DD>") as returned by list_transactions.
+    """
+    if not isinstance(value, str) or not _TXN_ID_RE.match(value):
+        return (
+            f"Invalid {name}: {value!r}. Must be a transaction ID "
+            "(UUID, optionally suffixed with _YYYY-MM-DD)."
+        )
     return None
 
 
@@ -234,7 +257,13 @@ def _rate_limit_warning(client: YNABClient) -> str:
 
 
 def _format_transaction(txn: Transaction) -> str:
-    """Format a transaction for display."""
+    """Format a transaction for display.
+
+    Trailing flags mark anything that makes a row easy to
+    misread: not-yet-cleared money, unapproved rows, and
+    auto-entered scheduled occurrences (which duplicate easily
+    if you re-enter them by hand from a bank statement).
+    """
     parts = [f"**{_format_dollars(txn.amount)}**"]
     if txn.payee_name:
         parts.append(f"to {txn.payee_name}")
@@ -243,6 +272,16 @@ def _format_transaction(txn: Transaction) -> str:
     parts.append(f"on {txn.date}")
     if txn.memo:
         parts.append(f'— "{txn.memo}"')
+
+    flags: list[str] = []
+    if txn.cleared != "cleared":
+        flags.append(txn.cleared)
+    if not txn.approved:
+        flags.append("unapproved")
+    if "_" in txn.id:
+        flags.append("scheduled")
+    if flags:
+        parts.append(f"[{', '.join(flags)}]")
     return " ".join(parts)
 
 
@@ -363,12 +402,24 @@ async def list_categories(
                 f"**{group.name}**\n"
                 f"  Group ID: `{group.id}`"
             )
+            internal = group.name.lower() == _INTERNAL_GROUP_NAME
             for cat in group.categories:
                 bal = _format_dollars(cat.balance)
-                lines.append(
-                    f"  - {cat.name}: {bal}\n"
-                    f"    ID: `{cat.id}`"
-                )
+                if internal and cat.name == _RTA_CATEGORY_NAME:
+                    # This balance is cumulative net income, not the
+                    # amount left to assign. Reading it as Ready to
+                    # Assign overstates available money badly.
+                    lines.append(
+                        f"  - {cat.name}: {bal} net income "
+                        f"(NOT Ready to Assign — "
+                        f"use get_month for that)\n"
+                        f"    ID: `{cat.id}`"
+                    )
+                else:
+                    lines.append(
+                        f"  - {cat.name}: {bal} available\n"
+                        f"    ID: `{cat.id}`"
+                    )
         if not lines:
             return "No categories found."
         return "\n".join(lines)
@@ -451,7 +502,8 @@ async def list_months(
                 f"Income {_format_dollars(m.income)} | "
                 f"Budgeted {_format_dollars(m.budgeted)} | "
                 f"Activity {_format_dollars(m.activity)} | "
-                f"Available {_format_dollars(m.to_be_budgeted)} | "
+                f"Ready to Assign "
+                f"{_format_dollars(m.to_be_budgeted)} | "
                 f"Age of Money: {age}"
             )
             if m.note:
@@ -510,7 +562,8 @@ async def get_month(
             f"- Income: {_format_dollars(detail.income)}",
             f"- Budgeted: {_format_dollars(detail.budgeted)}",
             f"- Activity: {_format_dollars(detail.activity)}",
-            f"- Available: {_format_dollars(detail.to_be_budgeted)}",
+            f"- Ready to Assign: "
+            f"{_format_dollars(detail.to_be_budgeted)}",
             f"- Age of Money: {age}",
         ]
         if detail.note:
@@ -939,7 +992,7 @@ async def update_transaction(
     err = _validate_budget_id(bid)
     if err:
         return err
-    err = _validate_uuid(transaction_id, "transaction_id")
+    err = _validate_transaction_id(transaction_id, "transaction_id")
     if err:
         return err
 
@@ -1052,7 +1105,7 @@ async def delete_transaction(
     err = _validate_budget_id(bid)
     if err:
         return err
-    err = _validate_uuid(transaction_id, "transaction_id")
+    err = _validate_transaction_id(transaction_id, "transaction_id")
     if err:
         return err
 
@@ -2180,7 +2233,7 @@ async def get_transaction(
     err = _validate_budget_id(bid)
     if err:
         return err
-    err = _validate_uuid(transaction_id, "transaction_id")
+    err = _validate_transaction_id(transaction_id, "transaction_id")
     if err:
         return err
 
