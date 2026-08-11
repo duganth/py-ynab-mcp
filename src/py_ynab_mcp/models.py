@@ -1,6 +1,7 @@
 """Pydantic models for YNAB API responses."""
 
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
@@ -239,11 +240,32 @@ class Category(BaseModel):
     balance: Decimal
     note: str | None = None
     hidden: bool = False
+    goal_target: Decimal | None = None
+    goal_target_date: str | None = None
+    goal_type: str | None = None
+    goal_needs_whole_amount: bool | None = None
+    goal_day: int | None = None
+    goal_cadence: int | None = None
+    goal_cadence_frequency: int | None = None
+    goal_creation_month: str | None = None
+    goal_percentage_complete: int | None = None
+    goal_months_to_budget: int | None = None
+    goal_under_funded: Decimal | None = None
+    goal_overall_funded: Decimal | None = None
+    goal_overall_left: Decimal | None = None
+    goal_snoozed_at: str | None = None
     deleted: bool
 
-    @field_validator("budgeted", "activity", "balance", mode="before")
+    @field_validator(
+        "budgeted", "activity", "balance", "goal_target",
+        "goal_under_funded", "goal_overall_funded",
+        "goal_overall_left",
+        mode="before",
+    )
     @classmethod
-    def convert_milliunits(cls, v: int | Decimal) -> Decimal:
+    def convert_milliunits(
+        cls, v: int | Decimal | None
+    ) -> Decimal | None:
         if isinstance(v, int):
             return milliunits_to_dollars(v)
         return v
@@ -261,12 +283,31 @@ class CategoryBudgetWrite(BaseModel):
     budgeted: int  # milliunits
 
 
+GoalFrequency = Literal["monthly", "weekly", "yearly"]
+
+
+class CategoryWrite(BaseModel):
+    """Request model for creating a category."""
+
+    category_group_id: str
+    name: str
+    note: str | None = None
+    goal_target: int | None = None
+    goal_target_date: str | None = None
+    goal_needs_whole_amount: bool | None = None
+    goal_frequency: GoalFrequency | None = None
+
+
 class CategoryUpdate(BaseModel):
     """Request model for updating category metadata."""
 
     name: str | None = None
     note: str | None = None
-    hidden: bool | None = None
+    category_group_id: str | None = None
+    goal_target: int | None = None
+    goal_target_date: str | None = None
+    goal_needs_whole_amount: bool | None = None
+    goal_frequency: GoalFrequency | None = None
 
 
 class CategoryGroup(BaseModel):

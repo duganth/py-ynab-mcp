@@ -22,6 +22,7 @@ from py_ynab_mcp.models import (
     CategoryGroup,
     CategoryResponse,
     CategoryUpdate,
+    CategoryWrite,
     MonthDetail,
     MonthDetailResponse,
     MonthsResponse,
@@ -442,6 +443,14 @@ class YNABClient:
         if not _UUID_RE.match(category_id):
             raise YNABError(400, "Invalid category_id format")
 
+    def _validate_category_group_id(
+        self, category_group_id: str
+    ) -> None:
+        if not _UUID_RE.match(category_group_id):
+            raise YNABError(
+                400, "Invalid category_group_id format"
+            )
+
     def _validate_payee_id(self, payee_id: str) -> None:
         if not _UUID_RE.match(payee_id):
             raise YNABError(400, "Invalid payee_id format")
@@ -485,6 +494,60 @@ class YNABClient:
             json={"category": update.model_dump(
                 exclude_none=True
             )},
+        )
+        try:
+            parsed = CategoryResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.category
+
+    async def clear_category_target(
+        self,
+        budget_id: str,
+        category_id: str,
+    ) -> Category:
+        """Remove a category target without changing category metadata."""
+        self._validate_budget_id(budget_id)
+        self._validate_category_id(category_id)
+        data = await self._request(
+            "PATCH",
+            f"/budgets/{budget_id}/categories/{category_id}",
+            json={
+                "category": {
+                    "goal_target": None,
+                    "goal_target_date": None,
+                    "goal_needs_whole_amount": None,
+                }
+            },
+        )
+        try:
+            parsed = CategoryResponse.model_validate(data)
+        except ValidationError:
+            raise YNABError(
+                0, "Unexpected response format from YNAB API"
+            ) from None
+        return parsed.category
+
+    async def create_category(
+        self,
+        budget_id: str,
+        category: CategoryWrite,
+    ) -> Category:
+        """Create a category in a category group."""
+        self._validate_budget_id(budget_id)
+        self._validate_category_group_id(
+            category.category_group_id
+        )
+        data = await self._request(
+            "POST",
+            f"/budgets/{budget_id}/categories",
+            json={
+                "category": category.model_dump(
+                    exclude_none=True
+                )
+            },
         )
         try:
             parsed = CategoryResponse.model_validate(data)

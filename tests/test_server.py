@@ -1,5 +1,7 @@
 """Tests for MCP server tool integration."""
 
+import inspect
+import json
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -26,6 +28,8 @@ from py_ynab_mcp.models import (
     User,
 )
 from py_ynab_mcp.server import (
+    clear_category_target,
+    create_category,
     create_scheduled_transaction,
     create_transaction,
     create_transactions,
@@ -380,6 +384,7 @@ class TestListCategories:
         assert "Rent" in result
         assert _VALID_UUID in result
         assert "ID:" in result
+        assert "Group ID: `group-1`" in result
 
     @pytest.mark.anyio
     async def test_skips_empty_groups(self) -> None:
@@ -738,6 +743,27 @@ class TestGetMonth:
         assert "Groceries" in result
         assert "Rent" in result
         assert "Categories" in result
+
+    @pytest.mark.anyio
+    async def test_shows_target_underfunding_and_cadence(
+        self,
+    ) -> None:
+        category = _make_category("Pihl's Computer")
+        category.goal_under_funded = Decimal("1500")
+        category.goal_cadence = 1
+        category.goal_cadence_frequency = 1
+        detail = _make_month_detail(categories=[category])
+        mock_client = AsyncMock()
+        mock_client.get_month.return_value = detail
+        mock_client.rate_limit_remaining = None
+
+        result = await get_month(
+            ctx=_mock_ctx(mock_client), month="2026-09-01"
+        )
+
+        assert "Underfunded $1,500.00" in result
+        assert "Target cadence Monthly (1)" in result
+        assert "frequency 1" in result
 
     @pytest.mark.anyio
     async def test_current_month(self) -> None:
@@ -1125,6 +1151,61 @@ class TestCreateTransaction:
 
         assert "txn-1" in result
         assert "Costco" in result
+        write = mock_client.create_transaction.call_args.args[1]
+        assert write.payee_name == "Costco"
+        assert write.payee_id is None
+
+    @pytest.mark.anyio
+    async def test_creates_with_transfer_payee_id(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.create_transaction.return_value = _make_transaction()
+        mock_client.rate_limit_remaining = None
+
+        await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-973.51",
+            date="2026-08-07",
+            payee_id=_VALID_UUID_2,
+        )
+
+        write = mock_client.create_transaction.call_args.args[1]
+        assert write.payee_id == _VALID_UUID_2
+        assert write.payee_name is None
+        payload = write.model_dump(exclude_none=True)
+        assert payload["payee_id"] == _VALID_UUID_2
+        assert "payee_name" not in payload
+
+    @pytest.mark.anyio
+    async def test_invalid_payee_id_skips_api(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-973.51",
+            date="2026-08-07",
+            payee_id="bad-id",
+        )
+
+        assert "Invalid payee_id" in result
+        mock_client.create_transaction.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_rejects_payee_id_with_name(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-973.51",
+            date="2026-08-07",
+            payee_name="Transfer",
+            payee_id=_VALID_UUID_2,
+        )
+
+        assert "mutually exclusive" in result
+        mock_client.create_transaction.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_invalid_amount_returns_error(self) -> None:
@@ -1255,6 +1336,20 @@ class TestCreateTransaction:
         assert "Groceries" in result
 
     @pytest.mark.anyio
+    async def test_dry_run_shows_payee_id(self) -> None:
+        result = await create_transaction(
+            ctx=_mock_ctx(),
+            account_id=_VALID_UUID,
+            amount="-973.51",
+            date="2026-08-07",
+            payee_id=_VALID_UUID_2,
+            dry_run=True,
+        )
+
+        assert "[DRY RUN]" in result
+        assert f"Payee ID: {_VALID_UUID_2}" in result
+
+    @pytest.mark.anyio
     async def test_rate_limit_warning_shown(self) -> None:
         txn = _make_transaction()
         mock_client = AsyncMock()
@@ -1332,6 +1427,68 @@ class TestCreateTransactions:
         assert "txn-1" in result
 
     @pytest.mark.anyio
+    async def test_bulk_create_with_transfer_payee_id(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.create_transactions.return_value = BulkCreateResponse(
+            transaction_ids=["txn-1"],
+            duplicate_import_ids=[],
+        )
+        mock_client.rate_limit_remaining = None
+
+        await create_transactions(
+            ctx=_mock_ctx(mock_client),
+            transactions_json=json.dumps(
+                [
+                    {
+                        "account_id": _VALID_UUID,
+                        "amount": "-973.51",
+                        "date": "2026-08-07",
+                        "payee_id": _VALID_UUID_2,
+                    }
+                ]
+            ),
+        )
+
+        writes = mock_client.create_transactions.call_args.args[1]
+        assert writes[0].payee_id == _VALID_UUID_2
+        assert writes[0].payee_name is None
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("payee_fields", "message"),
+        [
+            ({"payee_id": "bad-id"}, "Invalid transaction 0 payee_id"),
+            (
+                {
+                    "payee_id": _VALID_UUID_2,
+                    "payee_name": "Transfer",
+                },
+                "mutually exclusive",
+            ),
+        ],
+    )
+    async def test_invalid_bulk_payee_skips_api(
+        self,
+        payee_fields: dict[str, str],
+        message: str,
+    ) -> None:
+        mock_client = AsyncMock()
+        transaction = {
+            "account_id": _VALID_UUID,
+            "amount": "-973.51",
+            "date": "2026-08-07",
+            **payee_fields,
+        }
+
+        result = await create_transactions(
+            ctx=_mock_ctx(mock_client),
+            transactions_json=json.dumps([transaction]),
+        )
+
+        assert message in result
+        mock_client.create_transactions.assert_not_awaited()
+
+    @pytest.mark.anyio
     async def test_invalid_json(self) -> None:
         result = await create_transactions(
             ctx=_mock_ctx(),
@@ -1383,6 +1540,26 @@ class TestCreateTransactions:
         assert "[DRY RUN]" in result
         assert "-$42.50" in result
         assert "Costco" in result
+
+    @pytest.mark.anyio
+    async def test_dry_run_preview_shows_payee_id(self) -> None:
+        result = await create_transactions(
+            ctx=_mock_ctx(),
+            transactions_json=json.dumps(
+                [
+                    {
+                        "account_id": _VALID_UUID,
+                        "amount": "-973.51",
+                        "date": "2026-08-07",
+                        "payee_id": _VALID_UUID_2,
+                    }
+                ]
+            ),
+            dry_run=True,
+        )
+
+        assert "[DRY RUN]" in result
+        assert f"payee ID {_VALID_UUID_2}" in result
 
     @pytest.mark.anyio
     async def test_non_string_account_id(self) -> None:
@@ -1453,6 +1630,49 @@ class TestUpdateTransaction:
         assert "Updated memo" in result
 
     @pytest.mark.anyio
+    async def test_updates_transfer_payee_id(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_transaction.return_value = _make_transaction()
+        mock_client.rate_limit_remaining = None
+
+        await update_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+            payee_id=_VALID_UUID_2,
+        )
+
+        update = mock_client.update_transaction.call_args.args[1]
+        assert update.payee_id == _VALID_UUID_2
+        assert update.payee_name is None
+
+    @pytest.mark.anyio
+    async def test_invalid_payee_id_skips_update(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await update_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+            payee_id="bad-id",
+        )
+
+        assert "Invalid payee_id" in result
+        mock_client.update_transaction.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_rejects_payee_id_with_name(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await update_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+            payee_name="Transfer",
+            payee_id=_VALID_UUID_2,
+        )
+
+        assert "mutually exclusive" in result
+        mock_client.update_transaction.assert_not_awaited()
+
+    @pytest.mark.anyio
     async def test_no_fields_returns_error(self) -> None:
         result = await update_transaction(
             ctx=_mock_ctx(),
@@ -1499,6 +1719,18 @@ class TestUpdateTransaction:
         assert "[DRY RUN]" in result
         assert "-$50.00" in result
         assert "Changed" in result
+
+    @pytest.mark.anyio
+    async def test_dry_run_preview_shows_payee_id(self) -> None:
+        result = await update_transaction(
+            ctx=_mock_ctx(),
+            transaction_id=_VALID_UUID,
+            payee_id=_VALID_UUID_2,
+            dry_run=True,
+        )
+
+        assert "[DRY RUN]" in result
+        assert f"Payee ID: {_VALID_UUID_2}" in result
 
     @pytest.mark.anyio
     async def test_rate_limit_warning(self) -> None:
@@ -1728,6 +1960,11 @@ class TestUpdateCategoryBudget:
 
 
 class TestUpdateCategory:
+    def test_schema_does_not_expose_hidden(self) -> None:
+        assert "hidden" not in inspect.signature(
+            update_category
+        ).parameters
+
     @pytest.mark.anyio
     async def test_updates_name_and_returns_confirmation(
         self,
@@ -1767,8 +2004,8 @@ class TestUpdateCategory:
         assert "Eating out" in result
 
     @pytest.mark.anyio
-    async def test_updates_hidden(self) -> None:
-        cat = _make_category(hidden=True)
+    async def test_updates_target_with_date(self) -> None:
+        cat = _make_category()
         mock_client = AsyncMock()
         mock_client.update_category.return_value = cat
         mock_client.rate_limit_remaining = None
@@ -1776,10 +2013,81 @@ class TestUpdateCategory:
         result = await update_category(
             ctx=_mock_ctx(mock_client),
             category_id=_VALID_UUID,
-            hidden=True,
+            target_amount="2500.00",
+            target_date="2026-10-01",
+            target_needs_whole_amount=True,
         )
 
-        assert "hidden" in result
+        assert "$2,500.00" in result
+        assert "2026-10-01" in result
+        update = mock_client.update_category.call_args.args[2]
+        assert update.goal_target == 2500000
+        assert update.goal_target_date == "2026-10-01"
+        assert update.goal_needs_whole_amount is True
+
+    @pytest.mark.anyio
+    async def test_updates_target_with_frequency(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_category.return_value = _make_category()
+        mock_client.rate_limit_remaining = None
+
+        await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            target_amount="100.00",
+            target_frequency="monthly",
+        )
+
+        update = mock_client.update_category.call_args.args[2]
+        assert update.goal_target == 100000
+        assert update.goal_frequency == "monthly"
+
+    @pytest.mark.anyio
+    async def test_updates_target_date_without_amount(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_category.return_value = _make_category()
+        mock_client.rate_limit_remaining = None
+
+        await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            target_date="2026-11-01",
+        )
+
+        update = mock_client.update_category.call_args.args[2]
+        assert update.goal_target is None
+        assert update.goal_target_date == "2026-11-01"
+
+    @pytest.mark.anyio
+    async def test_updates_whole_amount_without_amount(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_category.return_value = _make_category()
+        mock_client.rate_limit_remaining = None
+
+        await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            target_needs_whole_amount=False,
+        )
+
+        update = mock_client.update_category.call_args.args[2]
+        assert update.goal_target is None
+        assert update.goal_needs_whole_amount is False
+
+    @pytest.mark.anyio
+    async def test_moves_category_group(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_category.return_value = _make_category()
+        mock_client.rate_limit_remaining = None
+
+        await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            category_group_id=_VALID_UUID_2,
+        )
+
+        update = mock_client.update_category.call_args.args[2]
+        assert update.category_group_id == _VALID_UUID_2
 
     @pytest.mark.anyio
     async def test_no_fields_returns_error(self) -> None:
@@ -1810,16 +2118,71 @@ class TestUpdateCategory:
 
     @pytest.mark.anyio
     async def test_dry_run_preview(self) -> None:
+        mock_client = AsyncMock()
         result = await update_category(
-            ctx=_mock_ctx(),
+            ctx=_mock_ctx(mock_client),
             category_id=_VALID_UUID,
             name="Restaurants",
             note="Eating out",
+            target_amount="2500",
+            target_frequency="yearly",
             dry_run=True,
         )
         assert "[DRY RUN]" in result
         assert "Restaurants" in result
         assert "Eating out" in result
+        assert "$2,500.00" in result
+        assert "yearly" in result
+        mock_client.update_category.assert_not_awaited()
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"target_amount": "0"}, "greater than zero"),
+            ({"target_amount": "-1"}, "greater than zero"),
+            ({"target_amount": "1.0001"}, "decimal places"),
+            (
+                {"target_frequency": "monthly"},
+                "target_amount is required",
+            ),
+            (
+                {
+                    "target_amount": "100",
+                    "target_frequency": "daily",
+                },
+                "Invalid target_frequency",
+            ),
+            (
+                {
+                    "target_amount": "100",
+                    "target_frequency": "monthly",
+                    "target_date": "2026-10-01",
+                },
+                "cannot be combined",
+            ),
+            (
+                {
+                    "target_amount": "100",
+                    "target_date": "2026-02-30",
+                },
+                "Invalid target_date",
+            ),
+        ],
+    )
+    async def test_invalid_target_skips_api(
+        self, kwargs: dict[str, object], message: str
+    ) -> None:
+        mock_client = AsyncMock()
+
+        result = await update_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+        assert message in result
+        mock_client.update_category.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_rate_limit_warning(self) -> None:
@@ -1867,6 +2230,173 @@ class TestUpdateCategory:
 
         assert "Unexpected error" in result
         assert "RuntimeError" in result
+
+
+class TestClearCategoryTarget:
+    @pytest.mark.anyio
+    async def test_clears_target(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.clear_category_target.return_value = _make_category(
+            name="Pihl's Computer",
+            budgeted=Decimal("0"),
+            balance=Decimal("1500"),
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await clear_category_target(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+        )
+
+        mock_client.clear_category_target.assert_awaited_once_with(
+            "last-used", _VALID_UUID
+        )
+        assert "Cleared target" in result
+        assert "Pihl's Computer" in result
+        assert "Assigned and available money were not changed" in result
+
+    @pytest.mark.anyio
+    async def test_dry_run_skips_api(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await clear_category_target(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+            dry_run=True,
+        )
+
+        assert "[DRY RUN]" in result
+        assert "Assigned and available money" in result
+        mock_client.clear_category_target.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_invalid_category_id_skips_api(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await clear_category_target(
+            ctx=_mock_ctx(mock_client), category_id="bad-id"
+        )
+
+        assert "Invalid category_id" in result
+        mock_client.clear_category_target.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.clear_category_target.side_effect = YNABError(
+            400, "Target could not be cleared"
+        )
+
+        result = await clear_category_target(
+            ctx=_mock_ctx(mock_client), category_id=_VALID_UUID
+        )
+
+        assert "Target could not be cleared" in result
+
+
+class TestCreateCategory:
+    @pytest.mark.anyio
+    async def test_creates_category_with_target(self) -> None:
+        created = _make_category(name="Arizona Trip")
+        mock_client = AsyncMock()
+        mock_client.create_category.return_value = created
+        mock_client.rate_limit_remaining = None
+
+        result = await create_category(
+            ctx=_mock_ctx(mock_client),
+            category_group_id=_VALID_UUID_2,
+            name="Arizona Trip",
+            note="October",
+            target_amount="2500.00",
+            target_date="2026-10-01",
+            target_needs_whole_amount=True,
+        )
+
+        assert "Created category Arizona Trip" in result
+        assert _VALID_UUID in result
+        category = mock_client.create_category.call_args.args[1]
+        assert category.category_group_id == _VALID_UUID_2
+        assert category.name == "Arizona Trip"
+        assert category.note == "October"
+        assert category.goal_target == 2500000
+        assert category.goal_target_date == "2026-10-01"
+        assert category.goal_needs_whole_amount is True
+
+    @pytest.mark.anyio
+    async def test_dry_run_skips_api(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_category(
+            ctx=_mock_ctx(mock_client),
+            category_group_id=_VALID_UUID_2,
+            name="Arizona Trip",
+            target_amount="500",
+            target_frequency="monthly",
+            dry_run=True,
+        )
+
+        assert "[DRY RUN]" in result
+        assert "Arizona Trip" in result
+        assert "$500.00" in result
+        assert "monthly" in result
+        mock_client.create_category.assert_not_awaited()
+
+    def test_schema_offers_target_frequency(self) -> None:
+        assert (
+            "target_frequency"
+            in inspect.signature(create_category).parameters
+        )
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"target_date": "2026-10-01"},
+            {"target_needs_whole_amount": False},
+        ],
+    )
+    async def test_dependent_target_field_requires_amount(
+        self, kwargs: dict[str, object]
+    ) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_category(
+            ctx=_mock_ctx(mock_client),
+            category_group_id=_VALID_UUID_2,
+            name="Trip",
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+        assert "target_amount is required" in result
+        mock_client.create_category.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_invalid_group_skips_api(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_category(
+            ctx=_mock_ctx(mock_client),
+            category_group_id="bad-id",
+            name="Trip",
+        )
+
+        assert "Invalid category_group_id" in result
+        mock_client.create_category.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_api_error(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.create_category.side_effect = YNABError(
+            400, "Invalid category"
+        )
+
+        result = await create_category(
+            ctx=_mock_ctx(mock_client),
+            category_group_id=_VALID_UUID_2,
+            name="Trip",
+        )
+
+        assert "Invalid category" in result
 
 
 # --- Scheduled transaction test helpers ---
@@ -2588,6 +3118,18 @@ class TestGetAccount:
 def _make_category_detail(
     note: str | None = "Weekly groceries",
     hidden: bool = False,
+    goal_target: Decimal | None = None,
+    goal_target_date: str | None = None,
+    goal_type: str | None = None,
+    goal_needs_whole_amount: bool | None = None,
+    goal_under_funded: Decimal | None = None,
+    goal_cadence: int | None = None,
+    goal_cadence_frequency: int | None = None,
+    goal_day: int | None = None,
+    goal_percentage_complete: int | None = None,
+    goal_months_to_budget: int | None = None,
+    goal_overall_funded: Decimal | None = None,
+    goal_overall_left: Decimal | None = None,
 ) -> Category:
     return Category(
         id=_VALID_UUID,
@@ -2598,6 +3140,18 @@ def _make_category_detail(
         balance=Decimal("250.00"),
         note=note,
         hidden=hidden,
+        goal_target=goal_target,
+        goal_target_date=goal_target_date,
+        goal_type=goal_type,
+        goal_needs_whole_amount=goal_needs_whole_amount,
+        goal_under_funded=goal_under_funded,
+        goal_cadence=goal_cadence,
+        goal_cadence_frequency=goal_cadence_frequency,
+        goal_day=goal_day,
+        goal_percentage_complete=goal_percentage_complete,
+        goal_months_to_budget=goal_months_to_budget,
+        goal_overall_funded=goal_overall_funded,
+        goal_overall_left=goal_overall_left,
         deleted=False,
     )
 
@@ -2636,6 +3190,45 @@ class TestGetCategory:
         )
 
         assert "Hidden: Yes" in result
+
+    @pytest.mark.anyio
+    async def test_target_metadata(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.get_category.return_value = (
+            _make_category_detail(
+                goal_target=Decimal("2500"),
+                goal_target_date="2026-10-01",
+                goal_type="TB",
+                goal_needs_whole_amount=True,
+                goal_under_funded=Decimal("250"),
+                goal_cadence=1,
+                goal_cadence_frequency=2,
+                goal_day=30,
+                goal_percentage_complete=50,
+                goal_months_to_budget=2,
+                goal_overall_funded=Decimal("1000"),
+                goal_overall_left=Decimal("1500"),
+            )
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await get_category(
+            ctx=_mock_ctx(mock_client),
+            category_id=_VALID_UUID,
+        )
+
+        assert "Target amount: $2,500.00" in result
+        assert "Target date: 2026-10-01" in result
+        assert "Target type: TB" in result
+        assert "Needs whole amount: Yes" in result
+        assert "Underfunded this month: $250.00" in result
+        assert "Target cadence: Monthly (1)" in result
+        assert "Target cadence frequency: 2" in result
+        assert "Target day: 30" in result
+        assert "Target complete: 50%" in result
+        assert "Months left in target period: 2" in result
+        assert "Funded in target period: $1,000.00" in result
+        assert "Remaining in target period: $1,500.00" in result
 
     @pytest.mark.anyio
     async def test_no_note(self) -> None:

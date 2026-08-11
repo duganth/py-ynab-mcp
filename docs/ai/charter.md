@@ -71,14 +71,14 @@ MCP Client (Claude) → MCP Server → YNAB API v1 (https://api.ynab.com/v1)
 ### Write operations
 | Resource | Operations |
 |---|---|
-| Categories | update, update monthly budget |
+| Categories | create, update/clear targets, update monthly budget |
 | Payees | update (rename) |
 | Transactions | create (single/bulk), update (single/bulk), delete |
 | Scheduled Transactions | create, update, delete |
 
 ### Not available in YNAB API
 - Create/delete budgets
-- Create/delete categories
+- Delete categories
 - Create/delete accounts
 - Create/delete payees (auto-created via transactions)
 - Transaction import (no API endpoint)

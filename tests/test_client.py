@@ -8,6 +8,8 @@ import pytest
 
 from py_ynab_mcp.client import YNABClient, YNABError
 from py_ynab_mcp.models import (
+    CategoryUpdate,
+    CategoryWrite,
     PayeeUpdate,
     ScheduledTransactionUpdate,
     ScheduledTransactionWrite,
@@ -1690,6 +1692,151 @@ def _category_data(
     }
 
 
+class TestCreateCategory:
+    @pytest.mark.anyio
+    async def test_posts_category_fields(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "category": _category_data(_VALID_UUID_2)
+            }
+        }
+        category = CategoryWrite(
+            category_group_id=_VALID_UUID_2,
+            name="Arizona Trip",
+            note="October",
+            goal_target=2500000,
+            goal_frequency="monthly",
+        )
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(200, mock_data)
+            result = await client.create_category(
+                _VALID_UUID, category
+            )
+
+        assert result.id == _VALID_UUID_2
+        mock_req.assert_awaited_once_with(
+            "POST",
+            f"/budgets/{_VALID_UUID}/categories",
+            json={
+                "category": {
+                    "category_group_id": _VALID_UUID_2,
+                    "name": "Arizona Trip",
+                    "note": "October",
+                    "goal_target": 2500000,
+                    "goal_frequency": "monthly",
+                }
+            },
+            params=None,
+        )
+
+    @pytest.mark.anyio
+    async def test_invalid_group_id_skips_request(
+        self, client: YNABClient
+    ) -> None:
+        category = CategoryWrite(
+            category_group_id="bad-id", name="Trip"
+        )
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            with pytest.raises(
+                YNABError, match="Invalid category_group_id"
+            ):
+                await client.create_category(
+                    _VALID_UUID, category
+                )
+
+        mock_req.assert_not_awaited()
+
+
+class TestUpdateCategory:
+    @pytest.mark.anyio
+    async def test_patches_only_provided_fields(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "category": _category_data(_VALID_UUID_2)
+            }
+        }
+        update = CategoryUpdate(
+            goal_target=2500000,
+            goal_target_date="2026-10-01",
+            goal_needs_whole_amount=True,
+        )
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(200, mock_data)
+            await client.update_category(
+                _VALID_UUID, _VALID_UUID_2, update
+            )
+
+        mock_req.assert_awaited_once_with(
+            "PATCH",
+            f"/budgets/{_VALID_UUID}/categories/{_VALID_UUID_2}",
+            json={
+                "category": {
+                    "goal_target": 2500000,
+                    "goal_target_date": "2026-10-01",
+                    "goal_needs_whole_amount": True,
+                }
+            },
+            params=None,
+        )
+
+    @pytest.mark.anyio
+    async def test_clear_target_sends_explicit_nulls(
+        self, client: YNABClient
+    ) -> None:
+        mock_data: dict[str, object] = {
+            "data": {
+                "category": _category_data(_VALID_UUID_2)
+            }
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(200, mock_data)
+            result = await client.clear_category_target(
+                _VALID_UUID, _VALID_UUID_2
+            )
+
+        assert result.id == _VALID_UUID_2
+        mock_req.assert_awaited_once_with(
+            "PATCH",
+            f"/budgets/{_VALID_UUID}/categories/{_VALID_UUID_2}",
+            json={
+                "category": {
+                    "goal_target": None,
+                    "goal_target_date": None,
+                    "goal_needs_whole_amount": None,
+                }
+            },
+            params=None,
+        )
+
+    @pytest.mark.anyio
+    async def test_clear_target_validates_category_id(
+        self, client: YNABClient
+    ) -> None:
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            with pytest.raises(
+                YNABError, match="Invalid category_id"
+            ):
+                await client.clear_category_target(
+                    _VALID_UUID, "bad-id"
+                )
+
+        mock_req.assert_not_awaited()
+
+
 class TestGetCategory:
     @pytest.mark.anyio
     async def test_returns_category(
@@ -1714,6 +1861,47 @@ class TestGetCategory:
         assert result.id == _VALID_UUID_2
         assert result.name == "Groceries"
         assert result.budgeted == Decimal("500")
+
+    @pytest.mark.anyio
+    async def test_returns_target_fields(
+        self, client: YNABClient
+    ) -> None:
+        category = _category_data(_VALID_UUID_2)
+        category.update(
+            {
+                "goal_target": 2500000,
+                "goal_target_date": "2026-10-01",
+                "goal_type": "TB",
+                "goal_needs_whole_amount": True,
+                "goal_day": 30,
+                "goal_cadence": 1,
+                "goal_cadence_frequency": 2,
+                "goal_under_funded": 250000,
+                "goal_overall_funded": 1000000,
+                "goal_overall_left": 1500000,
+            }
+        )
+        mock_data: dict[str, object] = {
+            "data": {"category": category}
+        }
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock
+        ) as mock_req:
+            mock_req.return_value = _mock_response(200, mock_data)
+            result = await client.get_category(
+                _VALID_UUID, _VALID_UUID_2
+            )
+
+        assert result.goal_target == Decimal("2500")
+        assert result.goal_target_date == "2026-10-01"
+        assert result.goal_type == "TB"
+        assert result.goal_needs_whole_amount is True
+        assert result.goal_day == 30
+        assert result.goal_cadence == 1
+        assert result.goal_cadence_frequency == 2
+        assert result.goal_under_funded == Decimal("250")
+        assert result.goal_overall_funded == Decimal("1000")
+        assert result.goal_overall_left == Decimal("1500")
 
     @pytest.mark.anyio
     async def test_invalid_category_id(

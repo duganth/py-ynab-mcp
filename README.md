@@ -7,7 +7,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for [YNAB (Yo
 - Query budgets, accounts, categories, transactions, payees, and months
 - Get single-resource details (account, category, payee, transaction)
 - Create, update, and delete transactions (single and bulk)
-- Update category budgets and metadata
+- Create categories; update or clear targets, metadata, and budgets
 - Rename payees
 - Manage scheduled transactions (full CRUD)
 - Budget settings and user info
@@ -66,12 +66,12 @@ We wanted an MIT-licensed Python implementation with full API coverage and thoro
 
 ### Write
 - Create, update, delete transactions (single and bulk)
-- Update category budgets and metadata
+- Create categories; update or clear targets, metadata, and budgets
 - Rename payees
 - Create, update, delete scheduled transactions
 
 ### Not available in YNAB API
-- Create/delete budgets, categories, or accounts
+- Create/delete budgets or accounts; delete categories
 - Create/delete payees (auto-created via transactions)
 - Transaction import
 

@@ -6,7 +6,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, TypedDict, cast
 
 from mcp.server.fastmcp import Context, FastMCP
 
@@ -14,6 +14,8 @@ from py_ynab_mcp.client import YNABClient, YNABError
 from py_ynab_mcp.models import (
     CategoryBudgetWrite,
     CategoryUpdate,
+    CategoryWrite,
+    GoalFrequency,
     PayeeUpdate,
     ScheduledTransactionUpdate,
     ScheduledTransactionWrite,
@@ -56,6 +58,14 @@ _BUDGET_ID_RE = re.compile(
 _CLEARED_VALUES = {"cleared", "uncleared", "reconciled"}
 _TRANSACTION_TYPE_VALUES = {"uncategorized", "unapproved"}
 _RATE_LIMIT_THRESHOLD = 20
+_TARGET_FREQUENCY_VALUES = {"monthly", "weekly", "yearly"}
+
+
+class _TargetFields(TypedDict, total=False):
+    goal_target: int
+    goal_target_date: str
+    goal_needs_whole_amount: bool
+    goal_frequency: GoalFrequency
 
 
 def _format_dollars(amount: Decimal) -> str:
@@ -63,6 +73,23 @@ def _format_dollars(amount: Decimal) -> str:
     if amount < 0:
         return f"-${abs(amount):,.2f}"
     return f"${amount:,.2f}"
+
+
+def _format_goal_cadence(cadence: int) -> str:
+    """Format YNAB's numeric target cadence code."""
+    if cadence == 0:
+        return "None (0)"
+    if cadence == 1:
+        return "Monthly (1)"
+    if cadence == 2:
+        return "Weekly (2)"
+    if 3 <= cadence <= 12:
+        return f"Every {cadence - 1} months ({cadence})"
+    if cadence == 13:
+        return "Yearly (13)"
+    if cadence == 14:
+        return "Every 2 years (14)"
+    return str(cadence)
 
 
 def _parse_amount(amount: str) -> tuple[Decimal, int] | str:
@@ -115,6 +142,64 @@ def _validate_budget_id(budget_id: str) -> str | None:
             "Must be a UUID, 'last-used', or 'default'."
         )
     return None
+
+
+def _build_target_configuration(
+    target_amount: str | None,
+    target_date: str | None,
+    target_needs_whole_amount: bool | None,
+    target_frequency: str | None,
+) -> tuple[_TargetFields, list[str]] | str:
+    """Validate and build YNAB target fields and preview lines."""
+    if (
+        target_frequency is not None
+        and target_frequency not in _TARGET_FREQUENCY_VALUES
+    ):
+        return (
+            f"Invalid target_frequency: {target_frequency!r}. "
+            "Must be 'monthly', 'weekly', or 'yearly'."
+        )
+    if target_date is not None:
+        err = _validate_date(target_date)
+        if err:
+            return err.replace("date", "target_date", 1)
+    if target_frequency is not None and target_date is not None:
+        return "target_frequency cannot be combined with target_date."
+    if target_amount is None and target_frequency is not None:
+        return "target_amount is required when setting target_frequency."
+
+    fields: _TargetFields = {}
+    preview: list[str] = []
+    if target_amount is not None:
+        parsed = _parse_amount(target_amount)
+        if isinstance(parsed, str):
+            return parsed.replace(
+                "Invalid amount:", "Invalid target_amount:", 1
+            )
+        amount_decimal, milliunits = parsed
+        if amount_decimal <= 0:
+            return "Invalid target_amount: must be greater than zero."
+        fields["goal_target"] = milliunits
+        preview.append(
+            f"target amount \u2192 {_format_dollars(amount_decimal)}"
+        )
+    if target_date is not None:
+        fields["goal_target_date"] = target_date
+        preview.append(f"target date \u2192 {target_date}")
+    if target_needs_whole_amount is not None:
+        fields["goal_needs_whole_amount"] = (
+            target_needs_whole_amount
+        )
+        whole_label = (
+            "yes" if target_needs_whole_amount else "no"
+        )
+        preview.append(f"target needs whole amount \u2192 {whole_label}")
+    if target_frequency is not None:
+        fields["goal_frequency"] = cast(
+            GoalFrequency, target_frequency
+        )
+        preview.append(f"target frequency \u2192 {target_frequency}")
+    return fields, preview
 
 
 def _validate_transaction_type(type_val: str) -> str | None:
@@ -274,7 +359,10 @@ async def list_categories(
         for group in groups:
             if not group.categories:
                 continue
-            lines.append(f"**{group.name}**")
+            lines.append(
+                f"**{group.name}**\n"
+                f"  Group ID: `{group.id}`"
+            )
             for cat in group.categories:
                 bal = _format_dollars(cat.balance)
                 lines.append(
@@ -434,12 +522,28 @@ async def get_month(
             lines.append("")
             lines.append("### Categories")
             for cat in cats:
-                lines.append(
+                line = (
                     f"- {cat.name}: "
                     f"Budgeted {_format_dollars(cat.budgeted)} | "
                     f"Activity {_format_dollars(cat.activity)} | "
                     f"Balance {_format_dollars(cat.balance)}"
                 )
+                if cat.goal_under_funded is not None:
+                    line += (
+                        " | Underfunded "
+                        f"{_format_dollars(cat.goal_under_funded)}"
+                    )
+                if cat.goal_cadence is not None:
+                    line += (
+                        " | Target cadence "
+                        f"{_format_goal_cadence(cat.goal_cadence)}"
+                    )
+                    if cat.goal_cadence_frequency is not None:
+                        line += (
+                            " (frequency "
+                            f"{cat.goal_cadence_frequency})"
+                        )
+                lines.append(line)
 
         response = "\n".join(lines)
         response += _rate_limit_warning(client)
@@ -560,6 +664,7 @@ async def create_transaction(
     amount: str,
     date: str,
     payee_name: str | None = None,
+    payee_id: str | None = None,
     category_id: str | None = None,
     memo: str | None = None,
     cleared: str | None = None,
@@ -574,6 +679,7 @@ async def create_transaction(
         amount: Dollar amount ("-42.50" for outflow, "100.00" for inflow).
         date: Transaction date (YYYY-MM-DD).
         payee_name: Payee name (YNAB auto-creates new payees).
+        payee_id: Payee UUID, including an account transfer payee ID.
         category_id: Category UUID.
         memo: Transaction memo.
         cleared: "cleared", "uncleared", or "reconciled".
@@ -595,6 +701,12 @@ async def create_transaction(
     err = _validate_date(date)
     if err:
         return err
+    if payee_id is not None and payee_name is not None:
+        return "payee_id and payee_name are mutually exclusive."
+    if payee_id is not None:
+        err = _validate_uuid(payee_id, "payee_id")
+        if err:
+            return err
     if category_id:
         err = _validate_uuid(category_id, "category_id")
         if err:
@@ -608,6 +720,7 @@ async def create_transaction(
         account_id=account_id,
         date=date,
         amount=milliunits,
+        payee_id=payee_id,
         payee_name=payee_name,
         category_id=category_id,
         memo=memo,
@@ -625,6 +738,8 @@ async def create_transaction(
         ]
         if payee_name:
             lines.append(f"  Payee: {payee_name}")
+        if payee_id is not None:
+            lines.append(f"  Payee ID: {payee_id}")
         if category_id:
             lines.append(f"  Category: {category_id}")
         if memo:
@@ -664,8 +779,8 @@ async def create_transactions(
 
     Args:
         transactions_json: JSON array of transactions. Each element:
-            {"account_id", "amount", "date", "payee_name"?, "category_id"?,
-             "memo"?, "cleared"?, "approved"?}.
+            {"account_id", "amount", "date", "payee_name"?, "payee_id"?,
+             "category_id"?, "memo"?, "cleared"?, "approved"?}.
             Amounts are in dollars (e.g. "-42.50").
         budget_id: Budget ID. Defaults to last-used budget.
         dry_run: Validate and preview without creating.
@@ -706,6 +821,20 @@ async def create_transactions(
         if err:
             return f"Transaction {i}: {err}"
 
+        payee_id = raw.get("payee_id")
+        payee_name = raw.get("payee_name")
+        if payee_id is not None and payee_name is not None:
+            return (
+                f"Transaction {i}: payee_id and payee_name "
+                "are mutually exclusive."
+            )
+        if payee_id is not None:
+            err = _validate_uuid(
+                payee_id, f"transaction {i} payee_id"
+            )
+            if err:
+                return err
+
         category_id = raw.get("category_id")
         if category_id:
             err = _validate_uuid(
@@ -727,7 +856,8 @@ async def create_transactions(
             account_id=account_id,
             date=date_str,
             amount=milliunits,
-            payee_name=raw.get("payee_name"),
+            payee_id=payee_id,
+            payee_name=payee_name,
             category_id=category_id,
             memo=raw.get("memo"),
             cleared=cleared_str,
@@ -737,8 +867,9 @@ async def create_transactions(
         previews.append(
             f"  {i + 1}. {_format_dollars(amount_decimal)}"
             f" on {date_str}"
-            + (f" to {raw.get('payee_name')}"
-               if raw.get("payee_name") else "")
+            + (f" to {payee_name}" if payee_name else "")
+            + (f" to payee ID {payee_id}"
+               if payee_id is not None else "")
         )
 
     if dry_run:
@@ -778,6 +909,7 @@ async def update_transaction(
     amount: str | None = None,
     date: str | None = None,
     payee_name: str | None = None,
+    payee_id: str | None = None,
     category_id: str | None = None,
     memo: str | None = None,
     cleared: str | None = None,
@@ -795,6 +927,7 @@ async def update_transaction(
         amount: New dollar amount ("-42.50" for outflow).
         date: New date (YYYY-MM-DD).
         payee_name: New payee name.
+        payee_id: New payee UUID, including an account transfer payee ID.
         category_id: New category UUID.
         memo: New memo.
         cleared: "cleared", "uncleared", or "reconciled".
@@ -812,6 +945,9 @@ async def update_transaction(
 
     update_fields: dict[str, object] = {"id": transaction_id}
     preview_lines: list[str] = []
+
+    if payee_id is not None and payee_name is not None:
+        return "payee_id and payee_name are mutually exclusive."
 
     if account_id is not None:
         err = _validate_uuid(account_id, "account_id")
@@ -841,6 +977,13 @@ async def update_transaction(
     if payee_name is not None:
         update_fields["payee_name"] = payee_name
         preview_lines.append(f"  Payee: {payee_name}")
+
+    if payee_id is not None:
+        err = _validate_uuid(payee_id, "payee_id")
+        if err:
+            return err
+        update_fields["payee_id"] = payee_id
+        preview_lines.append(f"  Payee ID: {payee_id}")
 
     if category_id is not None:
         err = _validate_uuid(category_id, "category_id")
@@ -992,16 +1135,115 @@ async def update_category_budget(
 
 
 @mcp.tool()
+async def create_category(
+    ctx: ToolContext,
+    category_group_id: str,
+    name: str,
+    note: str | None = None,
+    target_amount: str | None = None,
+    target_date: str | None = None,
+    target_needs_whole_amount: bool | None = None,
+    target_frequency: str | None = None,
+    budget_id: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Create a category in a YNAB category group.
+
+    Args:
+        category_group_id: Category group UUID.
+        name: Category name.
+        note: Optional category note.
+        target_amount: Optional positive target amount in dollars.
+        target_date: Optional target date in YYYY-MM-DD format.
+        target_needs_whole_amount: Whether the entire target is needed.
+        target_frequency: Optional target recurrence: monthly, weekly,
+            or yearly. Cannot be combined with target_date.
+        budget_id: Budget ID. Defaults to last-used budget.
+        dry_run: Validate and preview without creating.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(
+        category_group_id, "category_group_id"
+    )
+    if err:
+        return err
+    if not name.strip():
+        return "Invalid name: category name cannot be empty."
+    if target_amount is None and (
+        target_date is not None
+        or target_needs_whole_amount is not None
+    ):
+        return (
+            "target_amount is required when creating a category "
+            "with target_date or target_needs_whole_amount."
+        )
+
+    target = _build_target_configuration(
+        target_amount,
+        target_date,
+        target_needs_whole_amount,
+        target_frequency,
+    )
+    if isinstance(target, str):
+        return target
+    target_fields, target_changes = target
+
+    category = CategoryWrite(
+        category_group_id=category_group_id,
+        name=name,
+        note=note,
+        goal_target=target_fields.get("goal_target"),
+        goal_target_date=target_fields.get("goal_target_date"),
+        goal_needs_whole_amount=target_fields.get(
+            "goal_needs_whole_amount"
+        ),
+        goal_frequency=target_fields.get("goal_frequency"),
+    )
+
+    if dry_run:
+        lines = [
+            "[DRY RUN] Would create category:",
+            f"  Group: {category_group_id}",
+            f"  Name: {name}",
+        ]
+        if note is not None:
+            lines.append(f"  Note: {note}")
+        lines.extend(f"  {change}" for change in target_changes)
+        return "\n".join(lines)
+
+    try:
+        client = _get_client(ctx)
+        created = await client.create_category(bid, category)
+        response = (
+            f"Created category {created.name} "
+            f"(ID: `{created.id}`)."
+        )
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
+
+
+@mcp.tool()
 async def update_category(
     ctx: ToolContext,
     category_id: str,
     name: str | None = None,
     note: str | None = None,
-    hidden: bool | None = None,
+    category_group_id: str | None = None,
+    target_amount: str | None = None,
+    target_date: str | None = None,
+    target_needs_whole_amount: bool | None = None,
+    target_frequency: str | None = None,
     budget_id: str | None = None,
     dry_run: bool = False,
 ) -> str:
-    """Update category metadata in YNAB.
+    """Update category metadata or target configuration in YNAB.
 
     Only provide the fields you want to change.
 
@@ -1009,7 +1251,12 @@ async def update_category(
         category_id: Category UUID.
         name: New category name.
         note: New category note.
-        hidden: Whether to hide the category.
+        category_group_id: New category group UUID.
+        target_amount: Positive target amount in dollars.
+        target_date: Target date in YYYY-MM-DD format.
+        target_needs_whole_amount: Whether the entire target is needed.
+        target_frequency: Target recurrence: monthly, weekly, or yearly.
+            Cannot be combined with target_date.
         budget_id: Budget ID. Defaults to last-used budget.
         dry_run: Validate and preview without updating.
     """
@@ -1023,19 +1270,43 @@ async def update_category(
 
     changes: list[str] = []
     if name is not None:
+        if not name.strip():
+            return "Invalid name: category name cannot be empty."
         changes.append(f'name \u2192 "{name}"')
     if note is not None:
         changes.append(f'note \u2192 "{note}"')
-    if hidden is not None:
-        changes.append(
-            f'hidden \u2192 {"yes" if hidden else "no"}'
+    if category_group_id is not None:
+        err = _validate_uuid(
+            category_group_id, "category_group_id"
         )
+        if err:
+            return err
+        changes.append(f"category group \u2192 {category_group_id}")
+
+    target = _build_target_configuration(
+        target_amount,
+        target_date,
+        target_needs_whole_amount,
+        target_frequency,
+    )
+    if isinstance(target, str):
+        return target
+    target_fields, target_changes = target
+    changes.extend(target_changes)
 
     if not changes:
         return "No fields to update."
 
     update = CategoryUpdate(
-        name=name, note=note, hidden=hidden
+        name=name,
+        note=note,
+        category_group_id=category_group_id,
+        goal_target=target_fields.get("goal_target"),
+        goal_target_date=target_fields.get("goal_target_date"),
+        goal_needs_whole_amount=target_fields.get(
+            "goal_needs_whole_amount"
+        ),
+        goal_frequency=target_fields.get("goal_frequency"),
     )
 
     if dry_run:
@@ -1052,6 +1323,52 @@ async def update_category(
         response = (
             f"Updated category {updated.name}: "
             f"{', '.join(changes)}"
+        )
+        response += _rate_limit_warning(client)
+        return response
+    except YNABError as e:
+        return f"YNAB API error: {e.detail}"
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}"
+
+
+@mcp.tool()
+async def clear_category_target(
+    ctx: ToolContext,
+    category_id: str,
+    budget_id: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """Remove a category target without changing its assigned money.
+
+    Args:
+        category_id: Category UUID.
+        budget_id: Budget ID. Defaults to last-used budget.
+        dry_run: Validate and preview without clearing the target.
+    """
+    bid = budget_id or "last-used"
+    err = _validate_budget_id(bid)
+    if err:
+        return err
+    err = _validate_uuid(category_id, "category_id")
+    if err:
+        return err
+
+    if dry_run:
+        return (
+            f"[DRY RUN] Would clear target for category "
+            f"{category_id}. Assigned and available money "
+            "would not be changed."
+        )
+
+    try:
+        client = _get_client(ctx)
+        updated = await client.clear_category_target(
+            bid, category_id
+        )
+        response = (
+            f"Cleared target for category {updated.name}. "
+            "Assigned and available money were not changed."
         )
         response += _rate_limit_warning(client)
         return response
@@ -1693,6 +2010,59 @@ async def get_category(
             lines.append(f"  Note: {cat.note}")
         if cat.hidden:
             lines.append("  Hidden: Yes")
+        if cat.goal_target is not None:
+            lines.append(
+                f"  Target amount: "
+                f"{_format_dollars(cat.goal_target)}"
+            )
+        if cat.goal_target_date is not None:
+            lines.append(
+                f"  Target date: {cat.goal_target_date}"
+            )
+        if cat.goal_type is not None:
+            lines.append(f"  Target type: {cat.goal_type}")
+        if cat.goal_needs_whole_amount is not None:
+            whole = (
+                "Yes" if cat.goal_needs_whole_amount else "No"
+            )
+            lines.append(f"  Needs whole amount: {whole}")
+        if cat.goal_under_funded is not None:
+            lines.append(
+                "  Underfunded this month: "
+                f"{_format_dollars(cat.goal_under_funded)}"
+            )
+        if cat.goal_cadence is not None:
+            lines.append(
+                "  Target cadence: "
+                f"{_format_goal_cadence(cat.goal_cadence)}"
+            )
+        if cat.goal_cadence_frequency is not None:
+            lines.append(
+                "  Target cadence frequency: "
+                f"{cat.goal_cadence_frequency}"
+            )
+        if cat.goal_day is not None:
+            lines.append(f"  Target day: {cat.goal_day}")
+        if cat.goal_percentage_complete is not None:
+            lines.append(
+                "  Target complete: "
+                f"{cat.goal_percentage_complete}%"
+            )
+        if cat.goal_months_to_budget is not None:
+            lines.append(
+                "  Months left in target period: "
+                f"{cat.goal_months_to_budget}"
+            )
+        if cat.goal_overall_funded is not None:
+            lines.append(
+                "  Funded in target period: "
+                f"{_format_dollars(cat.goal_overall_funded)}"
+            )
+        if cat.goal_overall_left is not None:
+            lines.append(
+                "  Remaining in target period: "
+                f"{_format_dollars(cat.goal_overall_left)}"
+            )
         if cat.category_group_id:
             lines.append(
                 f"  Group ID: `{cat.category_group_id}`"

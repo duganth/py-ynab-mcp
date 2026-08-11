@@ -3,9 +3,13 @@
 ## [Unreleased]
 
 ### Added
+- `create_category` tool and category target configuration support via `create_category` and `update_category`
+- Category target metadata in `get_category` output and category-group IDs in `list_categories`
+- `clear_category_target` tool for removing targets without changing assigned money
 - `update_payee` tool — rename payees via YNAB PATCH endpoint with dry-run support
 
 ### Fixed
+- Category reads now expose target underfunding and cadence metadata; recurring target frequency writes are validated against YNAB's documented monthly, weekly, and yearly values
 - Pin `mcp[cli]>=1.2,<2` — mcp 2.0.0 removed `mcp.server.fastmcp`, so fresh installs crashed on import with `ModuleNotFoundError`
 - Bulk create response model — was expecting a `bulk` wrapper that YNAB doesn't send, causing `ValidationError` on every `create_transactions` call
 - `dollars_to_milliunits` now rejects amounts with >3 decimal places instead of silently truncating
@@ -23,7 +27,7 @@
 - `list_months` MCP tool — budget month summaries with income, budgeted, activity, available, and age of money
 - `get_month` MCP tool — single month detail with per-category breakdown, supports "current" shorthand
 - `update_category_budget` MCP tool — set budgeted amount for a category in a specific month
-- `update_category` MCP tool — update category metadata (name, note, hidden) with dry-run support
+- `update_category` MCP tool — update category metadata with dry-run support
 - `list_budgets` MCP tool — lists all budgets with names, IDs, date ranges, and last modified dates
 - Shared YNAB client via FastMCP lifespan for connection pooling across tool calls
 - `list_transactions` MCP tool — query transactions with required `since_date` and optional account/category/payee/type filters, routes to correct YNAB endpoint

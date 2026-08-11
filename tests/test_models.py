@@ -12,6 +12,7 @@ from py_ynab_mcp.models import (
     Category,
     CategoryBudgetWrite,
     CategoryUpdate,
+    CategoryWrite,
     CurrencyFormat,
     DateFormat,
     MonthDetail,
@@ -249,11 +250,39 @@ class TestCategoryModel:
             balance=Decimal("250"),
             note="Weekly groceries",
             hidden=True,
+            goal_target=1000000,  # type: ignore[arg-type]
+            goal_target_date="2026-10-01",
+            goal_type="TB",
+            goal_needs_whole_amount=True,
+            goal_day=30,
+            goal_cadence=1,
+            goal_cadence_frequency=2,
+            goal_creation_month="2026-08-01",
+            goal_percentage_complete=50,
+            goal_months_to_budget=2,
+            goal_under_funded=250000,  # type: ignore[arg-type]
+            goal_overall_funded=500000,  # type: ignore[arg-type]
+            goal_overall_left=500000,  # type: ignore[arg-type]
+            goal_snoozed_at="2026-08-05T12:00:00Z",
             deleted=False,
         )
         assert cat.category_group_id == "group-1"
         assert cat.note == "Weekly groceries"
         assert cat.hidden is True
+        assert cat.goal_target == Decimal("1000")
+        assert cat.goal_target_date == "2026-10-01"
+        assert cat.goal_type == "TB"
+        assert cat.goal_needs_whole_amount is True
+        assert cat.goal_day == 30
+        assert cat.goal_cadence == 1
+        assert cat.goal_cadence_frequency == 2
+        assert cat.goal_creation_month == "2026-08-01"
+        assert cat.goal_percentage_complete == 50
+        assert cat.goal_months_to_budget == 2
+        assert cat.goal_under_funded == Decimal("250")
+        assert cat.goal_overall_funded == Decimal("500")
+        assert cat.goal_overall_left == Decimal("500")
+        assert cat.goal_snoozed_at == "2026-08-05T12:00:00Z"
 
     def test_optional_fields_default(self) -> None:
         cat = Category(
@@ -267,6 +296,12 @@ class TestCategoryModel:
         assert cat.category_group_id is None
         assert cat.note is None
         assert cat.hidden is False
+        assert cat.goal_target is None
+        assert cat.goal_target_date is None
+        assert cat.goal_type is None
+        assert cat.goal_needs_whole_amount is None
+        assert cat.goal_under_funded is None
+        assert cat.goal_cadence is None
 
 
 class TestCategoryBudgetWriteModel:
@@ -279,13 +314,21 @@ class TestCategoryBudgetWriteModel:
 class TestCategoryUpdateModel:
     def test_all_fields(self) -> None:
         u = CategoryUpdate(
-            name="Restaurants", note="Eating out", hidden=False
+            name="Restaurants",
+            note="Eating out",
+            category_group_id="group-2",
+            goal_target=500000,
+            goal_target_date="2026-10-01",
+            goal_needs_whole_amount=True,
         )
         dumped = u.model_dump(exclude_none=True)
         assert dumped == {
             "name": "Restaurants",
             "note": "Eating out",
-            "hidden": False,
+            "category_group_id": "group-2",
+            "goal_target": 500000,
+            "goal_target_date": "2026-10-01",
+            "goal_needs_whole_amount": True,
         }
 
     def test_partial_fields(self) -> None:
@@ -294,6 +337,25 @@ class TestCategoryUpdateModel:
         assert dumped == {"name": "Restaurants"}
         assert "note" not in dumped
         assert "hidden" not in dumped
+
+
+class TestCategoryWriteModel:
+    def test_serializes_creation_fields(self) -> None:
+        category = CategoryWrite(
+            category_group_id="group-1",
+            name="Arizona Trip",
+            note="October",
+            goal_target=2500000,
+            goal_frequency="monthly",
+        )
+
+        assert category.model_dump(exclude_none=True) == {
+            "category_group_id": "group-1",
+            "name": "Arizona Trip",
+            "note": "October",
+            "goal_target": 2500000,
+            "goal_frequency": "monthly",
+        }
 
 
 class TestMonthSummaryModel:
