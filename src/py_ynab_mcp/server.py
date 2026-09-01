@@ -19,10 +19,12 @@ from py_ynab_mcp.models import (
     PayeeUpdate,
     ScheduledTransactionUpdate,
     ScheduledTransactionWrite,
+    SubTransactionWrite,
     Transaction,
     TransactionUpdate,
     TransactionWrite,
     dollars_to_milliunits,
+    milliunits_to_dollars,
 )
 
 # Type alias for tool context — avoids repeating generic params.
@@ -122,6 +124,113 @@ def _parse_amount(amount: str) -> tuple[Decimal, int] | str:
             f"Invalid amount: {amount!r}. "
             "Too many decimal places (max 3)."
         )
+
+
+def _coerce_json_list(
+    value: str | list[Any],
+    name: str,
+) -> list[Any] | str:
+    """Accept a JSON array as a string or an already-parsed list.
+
+    Some MCP clients parse a JSON-array-looking string argument into
+    a real list before it reaches the tool, so a str-only parameter
+    is unusable from them. Returns the list or an error string.
+    """
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as e:
+        return f"Invalid {name}: {e}"
+    if not isinstance(parsed, list):
+        return f"Invalid {name}: expected a JSON array."
+    return parsed
+
+
+def _parse_subtransactions(
+    subtransactions_json: str | list[Any],
+    parent_milliunits: int,
+) -> tuple[list[SubTransactionWrite], list[str]] | str:
+    """Parse split legs to write models, or return an error string.
+
+    Legs must sum to the parent amount. YNAB rejects an unbalanced
+    split with a generic 400 that doesn't say which part was wrong,
+    so the sum is checked here where the message can be useful.
+    """
+    coerced = _coerce_json_list(
+        subtransactions_json, "subtransactions_json"
+    )
+    if isinstance(coerced, str):
+        return coerced
+    raw_list = coerced
+
+    if len(raw_list) < 2:
+        return (
+            "subtransactions_json must be a JSON array of at "
+            "least two split legs."
+        )
+
+    legs: list[SubTransactionWrite] = []
+    previews: list[str] = []
+    total = 0
+
+    for i, raw in enumerate(raw_list):
+        if not isinstance(raw, dict):
+            return (
+                f"Split leg {i}: expected an object, "
+                f"got {type(raw).__name__}."
+            )
+
+        parsed = _parse_amount(str(raw.get("amount", "")))
+        if isinstance(parsed, str):
+            return f"Split leg {i}: {parsed}"
+        leg_decimal, leg_milliunits = parsed
+        total += leg_milliunits
+
+        payee_id = raw.get("payee_id")
+        payee_name = raw.get("payee_name")
+        if payee_id is not None and payee_name is not None:
+            return (
+                f"Split leg {i}: payee_id and payee_name "
+                "are mutually exclusive."
+            )
+        if payee_id is not None:
+            err = _validate_uuid(payee_id, f"split leg {i} payee_id")
+            if err:
+                return err
+
+        category_id = raw.get("category_id")
+        if category_id:
+            err = _validate_uuid(
+                category_id, f"split leg {i} category_id"
+            )
+            if err:
+                return err
+
+        legs.append(SubTransactionWrite(
+            amount=leg_milliunits,
+            payee_id=payee_id,
+            payee_name=payee_name,
+            category_id=category_id,
+            memo=raw.get("memo"),
+        ))
+
+        memo = raw.get("memo")
+        previews.append(
+            f"    {i + 1}. {_format_dollars(leg_decimal)}"
+            + (f" -> {category_id}" if category_id else "")
+            + (f' — "{memo}"' if memo else "")
+        )
+
+    if total != parent_milliunits:
+        return (
+            "Split legs must sum to the transaction amount: legs "
+            f"total {_format_dollars(milliunits_to_dollars(total))}, "
+            "transaction is "
+            f"{_format_dollars(milliunits_to_dollars(parent_milliunits))}."
+        )
+
+    return legs, previews
 
 
 def _validate_date(date: str) -> str | None:
@@ -272,6 +381,17 @@ def _format_transaction(txn: Transaction) -> str:
     parts.append(f"on {txn.date}")
     if txn.memo:
         parts.append(f'— "{txn.memo}"')
+
+    legs = [s for s in txn.subtransactions if not s.deleted]
+    if legs:
+        parts.append(
+            "— split: "
+            + "; ".join(
+                _format_dollars(leg.amount)
+                + (f" {leg.category_name}" if leg.category_name else "")
+                for leg in legs
+            )
+        )
 
     flags: list[str] = []
     if txn.cleared != "cleared":
@@ -722,6 +842,7 @@ async def create_transaction(
     memo: str | None = None,
     cleared: str | None = None,
     approved: bool | None = None,
+    subtransactions_json: str | list[Any] | None = None,
     budget_id: str | None = None,
     dry_run: bool = False,
 ) -> str:
@@ -733,10 +854,16 @@ async def create_transaction(
         date: Transaction date (YYYY-MM-DD).
         payee_name: Payee name (YNAB auto-creates new payees).
         payee_id: Payee UUID, including an account transfer payee ID.
-        category_id: Category UUID.
+        category_id: Category UUID. Omit when splitting.
         memo: Transaction memo.
         cleared: "cleared", "uncleared", or "reconciled".
         approved: Whether the transaction is approved.
+        subtransactions_json: JSON array of split legs, to record one
+            card charge against several categories. Each element:
+            {"amount", "category_id"?, "payee_name"?, "payee_id"?,
+             "memo"?}. Amounts are dollars with the same sign as the
+            parent (e.g. "-30.00") and must sum to it. Needs at least
+            two legs, and category_id must be left off the parent.
         budget_id: Budget ID. Defaults to last-used budget.
         dry_run: Validate and preview without creating.
     """
@@ -769,6 +896,21 @@ async def create_transaction(
         if err:
             return err
 
+    subtxns: list[SubTransactionWrite] | None = None
+    sub_previews: list[str] = []
+    if subtransactions_json is not None:
+        if category_id:
+            return (
+                "A split transaction cannot have a parent category_id. "
+                "Put the categories on the split legs instead."
+            )
+        sub_result = _parse_subtransactions(
+            subtransactions_json, milliunits
+        )
+        if isinstance(sub_result, str):
+            return sub_result
+        subtxns, sub_previews = sub_result
+
     txn = TransactionWrite(
         account_id=account_id,
         date=date,
@@ -779,6 +921,7 @@ async def create_transaction(
         memo=memo,
         cleared=cleared,
         approved=approved,
+        subtransactions=subtxns,
     )
 
     if dry_run:
@@ -801,6 +944,9 @@ async def create_transaction(
             lines.append(f"  Cleared: {cleared}")
         if approved is not None:
             lines.append(f"  Approved: {approved}")
+        if sub_previews:
+            lines.append(f"  Split into {len(sub_previews)} legs:")
+            lines.extend(sub_previews)
         return "\n".join(lines)
 
     try:
@@ -821,7 +967,7 @@ async def create_transaction(
 @mcp.tool()
 async def create_transactions(
     ctx: ToolContext,
-    transactions_json: str,
+    transactions_json: str | list[Any],
     budget_id: str | None = None,
     dry_run: bool = False,
 ) -> str:
@@ -843,12 +989,12 @@ async def create_transactions(
     if err:
         return err
 
-    try:
-        raw_list = json.loads(transactions_json)
-    except json.JSONDecodeError as e:
-        return f"Invalid JSON: {e}"
+    coerced = _coerce_json_list(transactions_json, "transactions_json")
+    if isinstance(coerced, str):
+        return coerced
+    raw_list = coerced
 
-    if not isinstance(raw_list, list) or not raw_list:
+    if not raw_list:
         return "Expected a non-empty JSON array of transactions."
 
     writes: list[TransactionWrite] = []
@@ -967,6 +1113,7 @@ async def update_transaction(
     memo: str | None = None,
     cleared: str | None = None,
     approved: bool | None = None,
+    subtransactions_json: str | list[Any] | None = None,
     budget_id: str | None = None,
     dry_run: bool = False,
 ) -> str:
@@ -981,10 +1128,16 @@ async def update_transaction(
         date: New date (YYYY-MM-DD).
         payee_name: New payee name.
         payee_id: New payee UUID, including an account transfer payee ID.
-        category_id: New category UUID.
+        category_id: New category UUID. Omit when splitting.
         memo: New memo.
         cleared: "cleared", "uncleared", or "reconciled".
         approved: Whether the transaction is approved.
+        subtransactions_json: JSON array of split legs, converting this
+            into a split transaction. Each element: {"amount",
+            "category_id"?, "payee_name"?, "payee_id"?, "memo"?}.
+            Amounts are dollars with the same sign as the parent and
+            must sum to it. Pass amount too, so the legs can be checked
+            against the total. Replaces any existing legs.
         budget_id: Budget ID. Defaults to last-used budget.
         dry_run: Validate and preview without updating.
     """
@@ -1009,11 +1162,13 @@ async def update_transaction(
         update_fields["account_id"] = account_id
         preview_lines.append(f"  Account: {account_id}")
 
+    parent_milliunits: int | None = None
     if amount is not None:
         parsed = _parse_amount(amount)
         if isinstance(parsed, str):
             return parsed
         amount_decimal, milliunits = parsed
+        parent_milliunits = milliunits
         update_fields["amount"] = milliunits
         preview_lines.append(
             f"  Amount: {_format_dollars(amount_decimal)}"
@@ -1059,6 +1214,27 @@ async def update_transaction(
     if approved is not None:
         update_fields["approved"] = approved
         preview_lines.append(f"  Approved: {approved}")
+
+    if subtransactions_json is not None:
+        if parent_milliunits is None:
+            return (
+                "Pass amount along with subtransactions_json so the "
+                "split legs can be checked against the total."
+            )
+        if category_id is not None:
+            return (
+                "A split transaction cannot have a parent category_id. "
+                "Put the categories on the split legs instead."
+            )
+        sub_result = _parse_subtransactions(
+            subtransactions_json, parent_milliunits
+        )
+        if isinstance(sub_result, str):
+            return sub_result
+        subtxns, sub_previews = sub_result
+        update_fields["subtransactions"] = subtxns
+        preview_lines.append(f"  Split into {len(sub_previews)} legs:")
+        preview_lines.extend(sub_previews)
 
     if not preview_lines:
         return "No fields to update."

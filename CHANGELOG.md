@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Split transaction support — `create_transaction` and `update_transaction` take `subtransactions_json`, recording one card charge against several categories instead of forcing two hand-entered rows that no longer match the statement line. Legs are validated to sum to the parent amount before the call, and `get_transaction`/`list_transactions` now display existing splits
 - `create_category` tool and category target configuration support via `create_category` and `update_category`
 - Category target metadata in `get_category` output and category-group IDs in `list_categories`
 - `clear_category_target` tool for removing targets without changing assigned money

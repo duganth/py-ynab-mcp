@@ -146,6 +146,16 @@ class BudgetSettingsResponse(BaseModel):
 # --- Transaction models ---
 
 
+class SubTransactionWrite(BaseModel):
+    """One leg of a split transaction (request model)."""
+
+    amount: int  # milliunits
+    payee_id: str | None = None
+    payee_name: str | None = None
+    category_id: str | None = None
+    memo: str | None = None
+
+
 class TransactionWrite(BaseModel):
     """Request model for creating a transaction."""
 
@@ -160,6 +170,9 @@ class TransactionWrite(BaseModel):
     approved: bool | None = None
     flag_color: str | None = None
     import_id: str | None = None
+    # A split transaction carries its categories on the legs;
+    # category_id must stay unset on the parent.
+    subtransactions: list[SubTransactionWrite] | None = None
 
 
 class TransactionUpdate(BaseModel):
@@ -176,6 +189,29 @@ class TransactionUpdate(BaseModel):
     cleared: str | None = None
     approved: bool | None = None
     flag_color: str | None = None
+    subtransactions: list[SubTransactionWrite] | None = None
+
+
+class SubTransaction(BaseModel):
+    """One leg of a split transaction (response model)."""
+
+    id: str
+    transaction_id: str
+    amount: Decimal
+    memo: str | None = None
+    payee_id: str | None = None
+    payee_name: str | None = None
+    category_id: str | None = None
+    category_name: str | None = None
+    transfer_account_id: str | None = None
+    deleted: bool = False
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def convert_milliunits(cls, v: int | Decimal) -> Decimal:
+        if isinstance(v, int):
+            return milliunits_to_dollars(v)
+        return v
 
 
 class Transaction(BaseModel):
@@ -194,6 +230,7 @@ class Transaction(BaseModel):
     cleared: str
     approved: bool
     deleted: bool
+    subtransactions: list[SubTransaction] = []
 
     @field_validator("amount", mode="before")
     @classmethod

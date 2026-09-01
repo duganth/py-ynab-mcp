@@ -24,6 +24,7 @@ from py_ynab_mcp.models import (
     PayeeDetail,
     ScheduledSubTransaction,
     ScheduledTransaction,
+    SubTransaction,
     Transaction,
     User,
 )
@@ -1496,7 +1497,7 @@ class TestCreateTransactions:
             ctx=_mock_ctx(),
             transactions_json="not json",
         )
-        assert "Invalid JSON" in result
+        assert "Invalid transactions_json" in result
 
     @pytest.mark.anyio
     async def test_empty_array(self) -> None:
@@ -1512,7 +1513,27 @@ class TestCreateTransactions:
             ctx=_mock_ctx(),
             transactions_json='{"not": "array"}',
         )
-        assert "non-empty JSON array" in result
+        assert "expected a JSON array" in result
+
+    @pytest.mark.anyio
+    async def test_accepts_already_parsed_list(self) -> None:
+        """Some MCP clients parse JSON string args before they arrive."""
+        mock_client = AsyncMock()
+        mock_client.create_transactions.return_value = BulkCreateResponse(
+            transaction_ids=["a"], duplicate_import_ids=[]
+        )
+        mock_client.rate_limit_remaining = None
+
+        result = await create_transactions(
+            ctx=_mock_ctx(mock_client),
+            transactions_json=[{
+                "account_id": _VALID_UUID,
+                "amount": "-42.50",
+                "date": "2026-02-25",
+            }],
+        )
+
+        assert "Created 1 transactions" in result
 
     @pytest.mark.anyio
     async def test_invalid_amount_in_bulk(self) -> None:
@@ -3936,3 +3957,338 @@ class TestReadyToAssignPresentation:
 
         assert "Ready to Assign $5,577.49" in result
         assert "Available $" not in result
+
+
+_VALID_UUID_3 = "99999999-8888-7777-6666-555555555555"
+
+
+def _legs(*pairs: tuple[str, str]) -> str:
+    """Build a subtransactions_json payload from (amount, category) pairs."""
+    return json.dumps([
+        {"amount": amount, "category_id": category_id}
+        for amount, category_id in pairs
+    ])
+
+
+class TestCreateTransactionSplits:
+    @pytest.mark.anyio
+    async def test_creates_split_with_legs_on_write_model(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.create_transaction.return_value = _make_transaction()
+        mock_client.rate_limit_remaining = None
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-102.37",
+            date="2026-08-31",
+            payee_name="Costco Wholesale",
+            subtransactions_json=_legs(
+                ("-25.00", _VALID_UUID_2),
+                ("-77.37", _VALID_UUID_3),
+            ),
+        )
+
+        assert "txn-1" in result
+        write = mock_client.create_transaction.call_args.args[1]
+        assert write.category_id is None
+        assert write.subtransactions is not None
+        assert [leg.amount for leg in write.subtransactions] == [
+            -25000, -77370,
+        ]
+        assert [leg.category_id for leg in write.subtransactions] == [
+            _VALID_UUID_2, _VALID_UUID_3,
+        ]
+
+    @pytest.mark.anyio
+    async def test_legs_serialize_into_payload(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.create_transaction.return_value = _make_transaction()
+        mock_client.rate_limit_remaining = None
+
+        await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-58.17",
+            date="2026-08-30",
+            subtransactions_json=json.dumps([
+                {"amount": "-30.00", "category_id": _VALID_UUID_2,
+                 "memo": "V30 gift"},
+                {"amount": "-28.17", "category_id": _VALID_UUID_3},
+            ]),
+        )
+
+        write = mock_client.create_transaction.call_args.args[1]
+        payload = write.model_dump(exclude_none=True)
+        assert len(payload["subtransactions"]) == 2
+        assert payload["subtransactions"][0]["memo"] == "V30 gift"
+        # exclude_none must recurse so YNAB never sees null leg fields.
+        assert "payee_id" not in payload["subtransactions"][1]
+
+    @pytest.mark.anyio
+    async def test_unbalanced_legs_skip_api(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-102.37",
+            date="2026-08-31",
+            subtransactions_json=_legs(
+                ("-25.00", _VALID_UUID_2),
+                ("-70.00", _VALID_UUID_3),
+            ),
+        )
+
+        assert "must sum to the transaction amount" in result
+        assert "-$95.00" in result
+        assert "-$102.37" in result
+        mock_client.create_transaction.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_parent_category_rejected(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-102.37",
+            date="2026-08-31",
+            category_id=_VALID_UUID_2,
+            subtransactions_json=_legs(
+                ("-25.00", _VALID_UUID_2),
+                ("-77.37", _VALID_UUID_3),
+            ),
+        )
+
+        assert "cannot have a parent category_id" in result
+        mock_client.create_transaction.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_single_leg_rejected(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-25.00",
+            date="2026-08-31",
+            subtransactions_json=_legs(("-25.00", _VALID_UUID_2)),
+        )
+
+        assert "at least two split legs" in result
+        mock_client.create_transaction.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_invalid_json_skips_api(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-25.00",
+            date="2026-08-31",
+            subtransactions_json="{not json",
+        )
+
+        assert "Invalid subtransactions_json" in result
+        mock_client.create_transaction.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_invalid_leg_category_skips_api(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-50.00",
+            date="2026-08-31",
+            subtransactions_json=_legs(
+                ("-25.00", _VALID_UUID_2),
+                ("-25.00", "bad-id"),
+            ),
+        )
+
+        assert "Invalid split leg 1 category_id" in result
+        mock_client.create_transaction.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_dry_run_previews_legs(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-102.37",
+            date="2026-08-31",
+            subtransactions_json=_legs(
+                ("-25.00", _VALID_UUID_2),
+                ("-77.37", _VALID_UUID_3),
+            ),
+            dry_run=True,
+        )
+
+        assert "Split into 2 legs" in result
+        assert "-$25.00" in result
+        assert "-$77.37" in result
+        mock_client.create_transaction.assert_not_awaited()
+
+
+class TestUpdateTransactionSplits:
+    @pytest.mark.anyio
+    async def test_converts_to_split(self) -> None:
+        mock_client = AsyncMock()
+        mock_client.update_transaction.return_value = _make_transaction()
+        mock_client.rate_limit_remaining = None
+
+        await update_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+            amount="-102.37",
+            subtransactions_json=_legs(
+                ("-25.00", _VALID_UUID_2),
+                ("-77.37", _VALID_UUID_3),
+            ),
+        )
+
+        update = mock_client.update_transaction.call_args.args[1]
+        assert update.subtransactions is not None
+        assert len(update.subtransactions) == 2
+        assert update.subtransactions[0].amount == -25000
+
+    @pytest.mark.anyio
+    async def test_split_without_amount_skips_api(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await update_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+            subtransactions_json=_legs(
+                ("-25.00", _VALID_UUID_2),
+                ("-77.37", _VALID_UUID_3),
+            ),
+        )
+
+        assert "Pass amount along with subtransactions_json" in result
+        mock_client.update_transaction.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_parent_category_rejected(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await update_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+            amount="-50.00",
+            category_id=_VALID_UUID_2,
+            subtransactions_json=_legs(
+                ("-25.00", _VALID_UUID_2),
+                ("-25.00", _VALID_UUID_3),
+            ),
+        )
+
+        assert "cannot have a parent category_id" in result
+        mock_client.update_transaction.assert_not_awaited()
+
+
+class TestFormatTransactionSplits:
+    @pytest.mark.anyio
+    async def test_split_legs_shown(self) -> None:
+        txn = _make_transaction(category_name=None)
+        txn.subtransactions = [
+            SubTransaction(
+                id="sub-1",
+                transaction_id="txn-1",
+                amount=Decimal("-25.00"),
+                category_name="GF 30th Birthday",
+            ),
+            SubTransaction(
+                id="sub-2",
+                transaction_id="txn-1",
+                amount=Decimal("-77.37"),
+                category_name="Groceries",
+            ),
+        ]
+        mock_client = AsyncMock()
+        mock_client.get_transaction.return_value = txn
+        mock_client.rate_limit_remaining = None
+
+        result = await get_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+        )
+
+        assert "split:" in result
+        assert "-$25.00 GF 30th Birthday" in result
+        assert "-$77.37 Groceries" in result
+
+    @pytest.mark.anyio
+    async def test_deleted_legs_filtered(self) -> None:
+        txn = _make_transaction(category_name=None)
+        txn.subtransactions = [
+            SubTransaction(
+                id="sub-1",
+                transaction_id="txn-1",
+                amount=Decimal("-25.00"),
+                category_name="Kept",
+            ),
+            SubTransaction(
+                id="sub-2",
+                transaction_id="txn-1",
+                amount=Decimal("-77.37"),
+                category_name="Gone",
+                deleted=True,
+            ),
+        ]
+        mock_client = AsyncMock()
+        mock_client.get_transaction.return_value = txn
+        mock_client.rate_limit_remaining = None
+
+        result = await get_transaction(
+            ctx=_mock_ctx(mock_client),
+            transaction_id=_VALID_UUID,
+        )
+
+        assert "Kept" in result
+        assert "Gone" not in result
+
+
+class TestSplitsAcceptParsedList:
+    @pytest.mark.anyio
+    async def test_legs_as_list(self) -> None:
+        """A client may hand us a list instead of a JSON string."""
+        mock_client = AsyncMock()
+        mock_client.create_transaction.return_value = _make_transaction()
+        mock_client.rate_limit_remaining = None
+
+        await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-102.37",
+            date="2026-08-31",
+            subtransactions_json=[
+                {"amount": "-25.00", "category_id": _VALID_UUID_2},
+                {"amount": "-77.37", "category_id": _VALID_UUID_3},
+            ],
+        )
+
+        write = mock_client.create_transaction.call_args.args[1]
+        assert write.subtransactions is not None
+        assert [leg.amount for leg in write.subtransactions] == [
+            -25000, -77370,
+        ]
+
+    @pytest.mark.anyio
+    async def test_non_array_string_rejected(self) -> None:
+        mock_client = AsyncMock()
+
+        result = await create_transaction(
+            ctx=_mock_ctx(mock_client),
+            account_id=_VALID_UUID,
+            amount="-25.00",
+            date="2026-08-31",
+            subtransactions_json='{"not": "array"}',
+        )
+
+        assert "expected a JSON array" in result
+        mock_client.create_transaction.assert_not_awaited()
