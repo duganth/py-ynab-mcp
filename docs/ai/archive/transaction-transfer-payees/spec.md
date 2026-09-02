@@ -1,8 +1,8 @@
 ---
 feature: transaction-transfer-payees
-status: implementing
+status: complete
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-09-02
 iteration: 1
 ---
 

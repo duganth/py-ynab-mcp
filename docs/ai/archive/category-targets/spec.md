@@ -1,8 +1,8 @@
 ---
 feature: category-targets
-status: implementing
+status: complete
 created: 2026-08-04
-updated: 2026-08-05
+updated: 2026-09-02
 iteration: 3
 ---
 
